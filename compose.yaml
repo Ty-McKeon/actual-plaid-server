@@ -1,0 +1,40 @@
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TOKEN}
+    networks:
+      budget_net:
+        ipv4_address: 172.28.0.50
+    
+  # actual_server:
+  #   image: actualbudget/actual-server:latest
+  #   container_name: actual_server
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./actual-data:/data
+  #   networks:
+  #     - budget_net
+
+  flask_bridge:
+    build: ./bridge
+    container_name: flask_bridge
+    restart: unless-stopped
+    volumes:
+      - ./bridge-data:/app/data
+    networks:
+      - budget_net
+    deploy:
+      resources:
+        limits:
+          memory: 200M # 200MB memory limit
+
+networks:
+  budget_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
