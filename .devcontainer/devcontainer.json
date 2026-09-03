@@ -41,7 +41,8 @@
 			},
 			"extensions": [
 				"ms-python.black-formatter",
-				"ms-python.python"
+				"ms-python.python",
+				"samuelcolvin.jinjahtml"
 			]
         }
     },
