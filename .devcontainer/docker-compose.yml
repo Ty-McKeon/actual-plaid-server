@@ -4,8 +4,12 @@ services:
   flask_bridge:
     # 1. Mount local source code and database folder (paths are relative to .devcontainer/)
     volumes:
-      - ../bridge:/app:cached
-      - ../bridge-data:/data:cached
+      - ./bridge:/app:cached
+      - ./bridge-data:/data:cached
+    deploy:
+      resources:
+        limits:
+          memory: 4G # Allow infinite memory
 
     # 2. Expose port 8080 locally so you can test in your Windows browser at http://localhost:8080
     ports:

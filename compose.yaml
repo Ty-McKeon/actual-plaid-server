@@ -24,6 +24,7 @@ services:
     container_name: flask_bridge
     restart: unless-stopped
     volumes:
+      # - ./bridge:/app
       - ./bridge-data:/app/data
     networks:
       - budget_net

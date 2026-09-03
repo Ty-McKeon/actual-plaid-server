@@ -1,4 +1,4 @@
-FROM python:3.14.7-slim
+FROM python:3.12-slim
 WORKDIR /app
 
 # Prevent Python from writing .pyc files and buffer stdout/stderr
@@ -28,11 +28,11 @@ EXPOSE 8080
 
 # Run app using gunicorn
 CMD ["gunicorn", \
-     "--workers=2", \
-     "--threads=2", \
-     "--worker-class=gthread", \
-     "--bind=0.0.0.0:8080", \
-     "--forwarded-allow-ips=172.28.0.50", \
-     "--access-logfile=-", \
-     "--error-logfile=-", \
-     "main:app"]
+    "--workers=2", \
+    "--threads=2", \
+    "--worker-class=gthread", \
+    "--bind=0.0.0.0:8080", \
+    "--forwarded-allow-ips=172.28.0.50", \
+    "--access-logfile=-", \
+    "--error-logfile=-", \
+    "main:app"]
