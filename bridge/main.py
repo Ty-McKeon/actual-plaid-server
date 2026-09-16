@@ -66,12 +66,12 @@ def main():
     load_dotenv(DOTENV)
 
     # Add Client ID and Secret Key to all requests made with session
-    session.headers.update(
-        {
-            "PLAID-CLIENT-ID": os.environ["CLIENT_ID"],
-            "PLAID-SECRET": os.environ["SECRET"],
-        }
-    )
+    # session.headers.update(
+    #     {
+    #         "PLAID-CLIENT-ID": os.environ["CLIENT_ID"],
+    #         "PLAID-SECRET": os.environ["SECRET"],
+    #     }
+    # )
 
     # Run server on port specified in .env file, or default 8080
     app.run(debug=True, port=int(os.getenv("PORT") or "8080"))

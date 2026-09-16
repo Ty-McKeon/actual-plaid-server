@@ -2,14 +2,14 @@ version: '3.8'
 services:
   # Update this to the name of the service you want to work with in your docker-compose.yml file
   flask_bridge:
-    # 1. Mount local source code and database folder (paths are relative to .devcontainer/)
+    # 1. Mount local source code and database folder (paths are NOT relative to .devcontainer/)
     volumes:
       - ./bridge:/app:cached
       - ./bridge-data:/data:cached
     deploy:
       resources:
         limits:
-          memory: 4G # Allow infinite memory
+          memory: 6G # Allow more memory
 
     # 2. Expose port 8080 locally so you can test in your Windows browser at http://localhost:8080
     ports:
