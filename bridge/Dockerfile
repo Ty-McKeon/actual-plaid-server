@@ -1,19 +1,41 @@
-FROM python:3.12-slim
-WORKDIR /app
+# ------------------------------------------------------------------------------
+# 1. Base Stage: Environment, non-root user, and Python dependencies
+# ------------------------------------------------------------------------------
+FROM python:3.12-slim AS base
+
+WORKDIR /workspace
 
 # Prevent Python from writing .pyc files and buffer stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8080
 
-# Create a non-privileged user and group
-RUN groupadd -g 10001 appgroup && \
-    useradd -u 10001 -g appgroup -s /bin/bash -m appuser
+# Create a non-privileged user and group (default UID/GID 1000 for local dev)
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN groupadd -g ${USER_GID} appgroup && \
+    useradd -u ${USER_UID} -g appgroup -s /bin/bash -m appuser
 
 # Install app dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
+
+# ------------------------------------------------------------------------------
+# 2. Development Stage: Target for VS Code Dev Container (no code baked in)
+# ------------------------------------------------------------------------------
+FROM base AS development
+
+USER appuser
+
+CMD ["/bin/sh", "-c", "while sleep 1000; do :; done"]
+
+# ------------------------------------------------------------------------------
+# 3. Production Stage: Target for deployment (bakes code in /app)
+# ------------------------------------------------------------------------------
+FROM base AS production
+
+WORKDIR /app
 
 # Create the data directory for SQLite and set ownership
 RUN mkdir -p /app/data && chown -R appuser:appgroup /app
@@ -35,4 +57,4 @@ CMD ["gunicorn", \
     "--forwarded-allow-ips=172.28.0.50", \
     "--access-logfile=-", \
     "--error-logfile=-", \
-    "main:app"]
+    "app:app"]

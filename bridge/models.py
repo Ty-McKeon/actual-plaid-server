@@ -1,5 +1,6 @@
 """Database models and encryption utilities for Plaid configuration and items."""
 
+import base64
 import os
 from pathlib import Path
 from flask_sqlalchemy import SQLAlchemy
@@ -9,13 +10,27 @@ from cryptography.fernet import Fernet
 # Initialize SQLAlchemy database instance
 db = SQLAlchemy()
 
+def _format_fernet_key(key: bytes) -> bytes:
+    """Ensure the key is 32 url-safe base64-encoded bytes."""
+    try:
+        decoded = base64.urlsafe_b64decode(key)
+        if len(decoded) == 32:
+            return key
+    except Exception:
+        pass
+    # If the provided key is already 32 raw bytes, base64-encode it
+    if len(key) == 32:
+        return base64.urlsafe_b64encode(key)
+    return key
+
+
 def load_master_key() -> bytes:
     """Load the symmetric encryption key used for securing sensitive database fields.
 
     Resolution order:
       1. Container / Docker secret file at `/run/secrets/encryption_key`
       2. Environment variable `ENCRYPTION_KEY`
-      3. Insecure hardcoded development key (only permitted if `FLASK_DEBUG == "1"`)
+      3. Insecure hardcoded development key (only permitted if `FLASK_DEBUG` / `FLASK_ENV` is dev)
 
     Raises:
         RuntimeError: If no encryption key can be located outside debug mode.
@@ -26,16 +41,20 @@ def load_master_key() -> bytes:
     # 1. Check for secret file mounted in Docker/Kubernetes
     secret_path = Path("/run/secrets/encryption_key")
     if secret_path.is_file():
-        return secret_path.read_text().strip().encode()
+        return _format_fernet_key(secret_path.read_text().strip().encode())
 
     # 2. Check for key supplied via environment variable
     env_key = os.getenv("ENCRYPTION_KEY")
     if env_key:
-        return env_key.strip().encode()
+        return _format_fernet_key(env_key.strip().encode())
 
     # 3. Fallback dummy key for local development only
-    if os.getenv("FLASK_DEBUG") == "1":
-        return b"dev-insecure-master-key-padding-32b="
+    if (
+        os.getenv("FLASK_DEBUG") in ("1", "true", "True")
+        or os.getenv("FLASK_ENV") == "development"
+        or os.getenv("DEBUG") in ("1", "true", "True")
+    ):
+        return base64.urlsafe_b64encode(b"dev-insecure-master-key-32bytes!")
 
     # Fail fast if running in production without an encryption key configured
     raise RuntimeError("Master ENCRYPTION_KEY not found.")
