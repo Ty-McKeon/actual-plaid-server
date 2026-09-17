@@ -42,7 +42,8 @@
 			"extensions": [
 				"ms-python.black-formatter",
 				"ms-python.python",
-				"samuelcolvin.jinjahtml"
+				"samuelcolvin.jinjahtml",
+				"ms-azuretools.vscode-containers"
 			]
         }
     },
