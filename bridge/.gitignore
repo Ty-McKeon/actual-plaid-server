@@ -1,6 +1,0 @@
-.vscode
-.venv
-.env
-.env.secret
-.dockerignore
-compose.yaml

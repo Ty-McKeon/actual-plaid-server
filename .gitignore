@@ -1,1 +1,28 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Databases & Runtime State
+*.db
+*.db-wal
+*.db-shm
+bridge-data/
+actual-data/
+
+# Secrets & Environment
 .env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Editor & OS Metadata
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/launch.json
