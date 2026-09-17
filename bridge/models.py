@@ -69,8 +69,6 @@ class UserPlaidConfig(db.Model):
     Stores authentication metadata and user-specific Plaid credentials.
     """
 
-    __tablename__ = "user_plaid_configs"
-
     # Cloudflare Access Subject (`sub` claim) identifying the authenticated user
     user_id = db.Column(db.String(128), primary_key=True)  # Cloudflare `sub`
     # User's email address from authentication headers
@@ -88,8 +86,6 @@ class PlaidItem(db.Model):
 
     A single user can link multiple institutions, each producing a distinct Plaid Item.
     """
-
-    __tablename__ = "plaid_items"
 
     # Unique identifier for the local record
     id = db.Column(db.Integer, primary_key=True)

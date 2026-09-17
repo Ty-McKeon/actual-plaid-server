@@ -32,6 +32,8 @@ services:
       resources:
         limits:
           memory: 200M # 200MB memory limit
+    environment:
+      - DATABASE_URI=sqlite:////data/bridge.db
 
 networks:
   budget_net:
