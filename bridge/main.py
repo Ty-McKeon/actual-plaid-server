@@ -74,7 +74,7 @@ def main():
     # )
 
     # Run server on port specified in .env file, or default 8080
-    app.run(debug=True, port=int(os.getenv("PORT") or "8080"))
+    app.run(debug=True, port=8080, host="0.0.0.0")
 
 
 if __name__ == "__main__":
