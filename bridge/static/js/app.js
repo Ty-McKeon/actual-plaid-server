@@ -1,6 +1,6 @@
 import loadPlaid from "./plaidLoader.js";
 
-const PORT = globalThis.serverPort;
+const PORT = 8080;
 const CREATE_LINK_TOKEN_URL = `http://127.0.0.1:${PORT}/create_link_token`;
 const EXCHANGE_URL = `http://127.0.0.1:${PORT}/exchange_public_token`;
 

@@ -82,14 +82,14 @@ class EncryptedString(TypeDecorator):
         return fernet.decrypt(value.encode()).decode() if value else None
 
 
-class UserPlaidConfig(db.Model):
+class UserPlaidConfigs(db.Model):
     """User configuration and credentials for the Plaid API.
 
     Stores authentication metadata and user-specific Plaid credentials.
     """
 
     # Cloudflare Access Subject (`sub` claim) identifying the authenticated user
-    user_id = db.Column(db.String(128), primary_key=True)  # Cloudflare `sub`
+    user_id = db.Column(db.String(128), primary_key=True)
     # User's email address from authentication headers
     user_email = db.Column(db.String(255), nullable=False)
     # Plaid client ID if configured on a per-user basis
@@ -100,7 +100,7 @@ class UserPlaidConfig(db.Model):
     plaid_env = db.Column(db.String(32), default="sandbox")
 
 
-class PlaidItem(db.Model):
+class PlaidItems(db.Model):
     """Represents a linked financial institution (Plaid Item) associated with a user.
 
     A single user can link multiple institutions, each producing a distinct Plaid Item.
