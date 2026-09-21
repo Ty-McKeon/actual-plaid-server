@@ -4,12 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard</title>
+    <script
+            type="module"
+            src="{{ url_for('static', filename='js/dashboard.js') }}"
+            defer
+    ></script>
 </head>
 <body>
     <form id="setup-form">
-        <input type="text" id="clinetID" placeholder="Plaid Client ID" required />
-        <input type="password" id="secret" placeholder="Plaid Secret" required/>
-        <button type="submit" id="submitBtn">Save & Verify</button>
+        <input type="text" name="clientID" placeholder="Plaid Client ID" required />
+        <input type="password" name="secret" placeholder="Plaid Secret" required/>
+        <button type="submit"">Save & Verify</button>
     </form>
 </body>
 </html>

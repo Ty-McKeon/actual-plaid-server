@@ -2,7 +2,7 @@ import os
 import auth
 import requests
 import constants
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template, abort
 from models import db, UserPlaidConfigs
 
 def create_app():
@@ -19,7 +19,7 @@ def create_app():
 
     # Ensure SQLite enables WAL mode and foreign keys automatically
     with app.app_context():
-        from sqlalchemy import event
+        from sqlalchemy import event # TODO should probably move these
         from sqlalchemy.engine import Engine
 
         @event.listens_for(Engine, "connect")
@@ -36,18 +36,31 @@ def create_app():
 
 app = create_app()
 
+
+@app.before_request
+def check_csrf_origins():
+    if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
+        origin = request.headers.get("Origin")
+        fetch_site = request.headers.get("Sec-Fetch-Site")
+
+        # Block any explicit cross-site fetch
+        if fetch_site and fetch_site not in ["same-origin", "same-site", "none"]:
+            abort(403, description="Cross-origin requests forbidden.")
+
+
 @app.route("/")
 def dashboard():
-    return "<h1>Hello World!</h1>"
+    return render_template('dashboard.html.jinja')
 
-@app.post("/create_user")
+
+@app.put("/create-user")
 def create_user():
     if not request.is_json:
         return jsonify({"error": "Payload must be JSON"}), 400
 
     data = request.get_json()
 
-    client_id = data.get("client_id")
+    client_id = data.get("clientID")
     secret = data.get("secret")
 
     if not client_id or not secret:
@@ -72,7 +85,7 @@ def create_user():
 
     try: 
         # Raise error if plaid rejects credentials
-        res = requests.get(constants.PLAID_SANDBOX + constants.CREATE_LINK_TOKEN_ENDPOINT, headers=headers, json=body)
+        res = requests.post(constants.PLAID_SANDBOX + constants.CREATE_LINK_TOKEN_ENDPOINT, headers=headers, json=body)
         res.raise_for_status()
     except requests.HTTPError as e:
         return jsonify({"error": "Plaid rejected these credentials. Check your Client ID, Secret, and Environment."}), 400
@@ -91,6 +104,7 @@ def create_user():
     db.session.commit()
 
     return jsonify({"status": "verified"}), 200
+
 
 if __name__ == "__main__":
     app.run(debug=True, port=8080, host="0.0.0.0")
