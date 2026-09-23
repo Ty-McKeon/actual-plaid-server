@@ -1,1 +1,1 @@
-from .plaid_services import PlaidService
+from .plaid_service import PlaidService
