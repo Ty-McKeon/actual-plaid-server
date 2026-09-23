@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet
 # Initialize SQLAlchemy database instance
 db = SQLAlchemy()
 
+
 def _format_fernet_key(key: bytes) -> bytes:
     """Ensure the key is 32 url-safe base64-encoded bytes."""
     try:
@@ -63,6 +64,7 @@ def load_master_key() -> bytes:
 # Initialize Fernet cipher with the loaded master encryption key
 fernet = Fernet(load_master_key())
 
+
 class EncryptedString(TypeDecorator):
     """SQLAlchemy custom type that transparently encrypts and decrypts string values.
 
@@ -99,6 +101,23 @@ class UserPlaidConfigs(db.Model):
     # Plaid environment to target: 'sandbox', 'development', or 'production'
     plaid_env = db.Column(db.String(32), default="sandbox")
 
+    def to_dict(self, mask_secret: bool = True) -> dict:
+        """Serializes the record to a dictionary safe for API responses."""
+        return {
+            "user_id": self.user_id,
+            "client_id": self.plaid_client_id,
+            "env": self.plaid_env,
+            "has_secret": bool(self.plaid_secret),
+            # Never return raw secrets to the frontend
+            "secret_preview": f"••••{self.plaid_secret[-4:]}" if self.plaid_secret else None,
+        }
+
+    @classmethod
+    def get_dict_for_user(cls, user_id: str) -> dict | None:
+        """Convenience query method returning the serialized user dict."""
+        record = cls.query.filter_by(user_id=user_id).first()
+        return record.to_dict() if record else None
+
 
 class PlaidItems(db.Model):
     """Represents a linked financial institution (Plaid Item) associated with a user.
@@ -109,9 +128,7 @@ class PlaidItems(db.Model):
     # Unique identifier for the local record
     id = db.Column(db.Integer, primary_key=True)
     # User ID referencing the owner in UserPlaidConfig
-    user_id = db.Column(
-        db.String(128), db.ForeignKey("user_plaid_configs.user_id"), nullable=False
-    )
+    user_id = db.Column(db.String(128), db.ForeignKey("user_plaid_configs.user_id"), nullable=False)
     # Plaid-assigned item identifier returned upon public token exchange
     item_id = db.Column(db.String(128), unique=True, nullable=False)
     # Plaid financial institution identifier (e.g. 'ins_109508')

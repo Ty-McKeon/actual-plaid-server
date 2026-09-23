@@ -1,9 +1,8 @@
 import os
-import auth
-import requests
-import constants
-from flask import Flask, request, jsonify, render_template, abort
-from models import db, UserPlaidConfigs
+from routes import user_bp, plaid_bp
+from flask import Flask, request, render_template, abort, g
+from models import db
+
 
 def create_app():
     app = Flask(__name__)
@@ -16,10 +15,9 @@ def create_app():
     # Initialize app with extensions
     db.init_app(app)
 
-
     # Ensure SQLite enables WAL mode and foreign keys automatically
     with app.app_context():
-        from sqlalchemy import event # TODO should probably move these
+        from sqlalchemy import event  # TODO should probably move these
         from sqlalchemy.engine import Engine
 
         @event.listens_for(Engine, "connect")
@@ -34,7 +32,10 @@ def create_app():
 
     return app
 
+
 app = create_app()
+app.register_blueprint(user_bp)
+app.register_blueprint(plaid_bp)
 
 
 @app.before_request
@@ -48,62 +49,16 @@ def check_csrf_origins():
             abort(403, description="Cross-origin requests forbidden.")
 
 
+@app.before_request
+def get_user_credentials():
+    # TODO implement
+    g.user_id = "7335d417-61da-459d-899c-0a01c76a2f94"
+    g.email = "user@example.com"
+
+
 @app.route("/")
 def dashboard():
-    return render_template('dashboard.html.jinja')
-
-
-@app.put("/create-user")
-def create_user():
-    if not request.is_json:
-        return jsonify({"error": "Payload must be JSON"}), 400
-
-    data = request.get_json()
-
-    client_id = data.get("clientID")
-    secret = data.get("secret")
-
-    if not client_id or not secret:
-        return jsonify({"error": "Missing client ID or secret"}), 400
-
-    email = auth.get_user_email()
-    sub = auth.get_user_sub()
-
-
-    headers = {
-        "PLAID-CLIENT-ID": client_id,
-        "PLAID-SECRET": secret,
-    }
-
-    body = {
-        "client_name": "simplefin-emulator",
-        "language": "en",
-        "country_codes": ["US"],
-        "user": {"client_user_id": sub},
-        "products": ["transactions"],
-    }
-
-    try: 
-        # Raise error if plaid rejects credentials
-        res = requests.post(constants.PLAID_SANDBOX + constants.CREATE_LINK_TOKEN_ENDPOINT, headers=headers, json=body)
-        res.raise_for_status()
-    except requests.HTTPError as e:
-        return jsonify({"error": "Plaid rejected these credentials. Check your Client ID, Secret, and Environment."}), 400
-
-    # Write credentials to database
-    config = UserPlaidConfigs.query.filter_by(user_id=sub).first()
-    if not config:
-        config = UserPlaidConfigs()
-        config.user_id = sub
-        config.user_email = email
-        db.session.add(config)
-
-    config.plaid_client_id = client_id
-    config.plaid_secret = secret
-
-    db.session.commit()
-
-    return jsonify({"status": "verified"}), 200
+    return render_template("dashboard.html.jinja")
 
 
 if __name__ == "__main__":
