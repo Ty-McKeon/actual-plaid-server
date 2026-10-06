@@ -109,9 +109,14 @@ def exchange_public_token():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         abort(400, description="Request body must be a JSON object.")
-    validate_string_fields(data, {
-        "public_token": 512, "institution_id": 64, "institution_name": 255,
-    })
+    validate_string_fields(
+        data,
+        {
+            "public_token": 512,
+            "institution_id": 64,
+            "institution_name": 255,
+        },
+    )
 
     public_token = data.get("public_token")
     if not public_token or not isinstance(public_token, str):

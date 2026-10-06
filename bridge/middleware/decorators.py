@@ -54,5 +54,10 @@ def validate_string_fields(data, fields):
     """Reject structured JSON values before string operations or upstream calls."""
     for field, max_length in fields.items():
         value = data.get(field)
-        if value is not None and (not isinstance(value, str) or len(value) > max_length):
-            abort(400, description=f"{field} must be a string of at most {max_length} characters.")
+        if value is not None and (
+            not isinstance(value, str) or len(value) > max_length
+        ):
+            abort(
+                400,
+                description=f"{field} must be a string of at most {max_length} characters.",
+            )

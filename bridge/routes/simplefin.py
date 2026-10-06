@@ -66,7 +66,12 @@ logger = logging.getLogger(__name__)
 def _verify_basic_auth() -> SimpleFinCredentials | None:
     """Extracts and verifies HTTP Basic Auth credentials from the request."""
     auth = request.authorization
-    if not auth or auth.type.lower() != "basic" or not auth.username or not auth.password:
+    if (
+        not auth
+        or auth.type.lower() != "basic"
+        or not auth.username
+        or not auth.password
+    ):
         return None
 
     credentials = SimpleFinCredentials.query.filter_by(username=auth.username).first()
@@ -268,8 +273,11 @@ def get_accounts():
 
     start_date_epoch = parse_epoch("start-date")
     end_date_epoch = parse_epoch("end-date")
-    if (start_date_epoch is not None and end_date_epoch is not None
-            and start_date_epoch > end_date_epoch):
+    if (
+        start_date_epoch is not None
+        and end_date_epoch is not None
+        and start_date_epoch > end_date_epoch
+    ):
         abort(400, description="start-date must not be after end-date.")
     pending = request.args.get("pending") in ("1", "true", "True")
     balances_only = request.args.get("balances-only") in ("1", "true", "True")

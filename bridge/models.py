@@ -222,7 +222,9 @@ class SimpleFinCredentials(db.Model):
         """Deletes expired unclaimed setup tokens. The caller commits."""
         cls.query.filter(
             cls.is_claimed.is_(False),
-            db.or_(cls.created_at.is_(None), cls.created_at < cls._setup_token_cutoff()),
+            db.or_(
+                cls.created_at.is_(None), cls.created_at < cls._setup_token_cutoff()
+            ),
         ).delete(synchronize_session=False)
 
     def check_password(self, password: str) -> bool:

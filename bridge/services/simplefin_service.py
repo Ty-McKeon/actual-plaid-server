@@ -76,9 +76,7 @@ def format_amount(amount: float | str) -> str:
     return _format_money(-Decimal(str(amount)))
 
 
-def format_balance(
-    balance: float | str | None, account_type: str | None = None
-) -> str:
+def format_balance(balance: float | str | None, account_type: str | None = None) -> str:
     """Formats account balance with 2 decimal places.
 
     Plaid reports the amount owed on credit cards and loans as a positive number, so
@@ -126,8 +124,10 @@ def map_plaid_transaction_to_simplefin(tx: dict) -> dict:
         "description": tx.get("name") or tx.get("original_description") or "",
         # Actual requires payeeName even when Plaid supplies no merchant name.
         "payee": (
-            tx.get("merchant_name") or tx.get("name")
-            or tx.get("original_description") or "Unknown payee"
+            tx.get("merchant_name")
+            or tx.get("name")
+            or tx.get("original_description")
+            or "Unknown payee"
         ),
         "transacted_at": to_epoch(authorized_date),
         "pending": bool(tx.get("pending", False)),

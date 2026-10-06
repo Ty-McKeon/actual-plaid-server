@@ -38,9 +38,16 @@ def upsert_user_config():
     else:
         data = request.form
 
-    validate_string_fields(data, {
-        "clientID": 128, "client_id": 128, "secret": 512, "env": 32, "plaid_env": 32,
-    })
+    validate_string_fields(
+        data,
+        {
+            "clientID": 128,
+            "client_id": 128,
+            "secret": 512,
+            "env": 32,
+            "plaid_env": 32,
+        },
+    )
     client_id = (data.get("clientID") or data.get("client_id") or "").strip()
     secret = (data.get("secret") or "").strip()
     env = (data.get("env") or data.get("plaid_env") or "sandbox").strip().lower()
@@ -70,7 +77,9 @@ def upsert_user_config():
     # switching either would leave every linked institution unusable (and impossible
     # to remove at Plaid). Rotating only the secret is fine.
     existing = UserPlaidConfigs.query.filter_by(user_id=user_id).first()
-    if existing and (existing.plaid_client_id != client_id or existing.plaid_env != env):
+    if existing and (
+        existing.plaid_client_id != client_id or existing.plaid_env != env
+    ):
         linked = PlaidItems.query.filter_by(user_id=user_id).count()
         if linked:
             err = (
@@ -96,7 +105,9 @@ def upsert_user_config():
         err = "Invalid Plaid client ID or secret. Please verify your credentials and environment."
         if request.headers.get("HX-Request"):
             existing = UserPlaidConfigs.query.filter_by(user_id=user_id).first()
-            temp_config = existing or UserPlaidConfigs(plaid_client_id=client_id, plaid_env=env)
+            temp_config = existing or UserPlaidConfigs(
+                plaid_client_id=client_id, plaid_env=env
+            )
             return (
                 render_template(
                     "partials/setup-form.html.jinja",
