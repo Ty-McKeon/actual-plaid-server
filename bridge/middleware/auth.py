@@ -6,6 +6,7 @@ for protected dashboard and API endpoints, extracting user identity claims.
 
 import logging
 import os
+import re
 from functools import wraps
 from typing import Any
 
@@ -64,9 +65,13 @@ def get_normalized_team_domain() -> str | None:
     if not raw:
         return None
 
-    domain = raw.replace("https://", "").replace("http://", "").rstrip("/")
+    domain = raw.removeprefix("https://").removeprefix("http://").rstrip("/")
     if not domain.endswith(".cloudflareaccess.com"):
         domain = f"{domain}.cloudflareaccess.com"
+    if not re.fullmatch(
+        r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.cloudflareaccess\.com", domain
+    ):
+        raise ValueError("Invalid Cloudflare team domain.")
     return domain
 
 
@@ -78,15 +83,18 @@ def get_jwks_client(team_domain: str) -> PyJWKClient:
             certs_url,
             cache_jwk_set=True,
             lifespan=3600,
+            timeout=5,
         )
     return _jwks_clients[team_domain]
 
 
-def validate_cloudflare_jwt(token: str) -> dict[str, Any]:
+def validate_cloudflare_jwt(token: str, audience: str | None = None) -> dict[str, Any]:
     """Cryptographically verifies a Cloudflare Access JWT and returns its claims.
 
     Args:
         token: Raw JWT string from Cloudflare Access.
+        audience: Application Audience (AUD) tag the token must carry. Defaults to
+            the Access application protecting the dashboard (`CLOUDFLARE_AUD`).
 
     Returns:
         Decoded claims dictionary containing 'sub', 'email', etc.
@@ -98,7 +106,8 @@ def validate_cloudflare_jwt(token: str) -> dict[str, Any]:
     """
     team_domain = get_normalized_team_domain()
     expected_aud = (
-        os.getenv("CLOUDFLARE_AUD")
+        audience
+        or os.getenv("CLOUDFLARE_AUD")
         or os.getenv("CLOUDFLARE_AUDIENCE")
         or os.getenv("POLICY_AUD")
     )
@@ -135,10 +144,15 @@ def validate_cloudflare_jwt(token: str) -> dict[str, Any]:
     )
 
 
-def authenticate_request() -> tuple[dict[str, Any] | None, tuple[Any, int] | None]:
+def authenticate_request(
+    audience: str | None = None,
+) -> tuple[dict[str, Any] | None, tuple[Any, int] | None]:
     """Authenticates the incoming request via Cloudflare Zero Trust.
 
     Sets `g.user_id` and `g.email` if authentication succeeds.
+
+    Args:
+        audience: Application Audience (AUD) tag to require instead of the default.
 
     Returns:
         A tuple of `(payload_dict, None)` on success, or
@@ -166,7 +180,7 @@ def authenticate_request() -> tuple[dict[str, Any] | None, tuple[Any, int] | Non
         )
 
     try:
-        payload = validate_cloudflare_jwt(token)
+        payload = validate_cloudflare_jwt(token, audience)
         user_id = payload.get("sub")
         if not user_id:
             return None, (

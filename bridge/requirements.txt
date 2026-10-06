@@ -15,7 +15,7 @@ MarkupSafe==3.0.3
 nulltype==2.3.1
 plaid-python==44.0.0
 pycparser==3.0
-PyJWT==2.14.0
+PyJWT==2.15.0
 pyOpenSSL==26.4.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.3
@@ -23,5 +23,5 @@ requests==2.34.2
 six==1.17.0
 SQLAlchemy==2.0.52
 typing_extensions==4.16.0
-urllib3==2.7.0
-Werkzeug==3.1.8
+urllib3==2.8.0
+Werkzeug==3.1.9

@@ -1,0 +1,30 @@
+# Routes every request for the Actual Budget hostname to the signed-in user's own
+# Actual container. Cloudflare terminates TLS and the tunnel connects here over HTTP.
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	# `route` keeps these in the order written; Caddy would otherwise run
+	# forward_auth before request_header and drop the header the bridge set.
+	route {
+		# Only the bridge may choose the upstream, never the client
+		request_header -X-Actual-Upstream
+
+		# The bridge verifies the Cloudflare Access token and names the user's
+		# container. Anything but a 2xx answer (401, 403) is returned to the
+		# browser as is.
+		forward_auth flask_bridge:8080 {
+			uri /auth/route
+			copy_headers X-Actual-Upstream
+		}
+
+		reverse_proxy {http.request.header.X-Actual-Upstream}:5006 {
+			# A container that was just started needs a few seconds before it
+			# accepts connections; keep trying instead of failing the request.
+			lb_try_duration 20s
+			lb_try_interval 250ms
+		}
+	}
+}

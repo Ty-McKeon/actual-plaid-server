@@ -23,6 +23,7 @@ ENV_MAP = {
 
 # Maximum page size accepted by /transactions/get
 TRANSACTIONS_PAGE_SIZE = 500
+REQUEST_TIMEOUT = (5, 20)
 
 
 def plaid_error_message(err: plaid.ApiException) -> str:
@@ -67,7 +68,9 @@ class PlaidService:
             user=LinkTokenCreateRequestUser(client_user_id=self.user_id),
         )
 
-        response = self.client.link_token_create(request)
+        response = self.client.link_token_create(
+            request, _request_timeout=REQUEST_TIMEOUT
+        )
         return response["link_token"]
 
     def exchange_public_token(
@@ -83,12 +86,17 @@ class PlaidService:
         """
 
         request = ItemPublicTokenExchangeRequest(public_token=public_token)
-        response = self.client.item_public_token_exchange(request)
+        response = self.client.item_public_token_exchange(
+            request, _request_timeout=REQUEST_TIMEOUT
+        )
         return response["access_token"], response["item_id"]
 
     def remove_item(self, access_token: str) -> None:
         """Removes the Item at Plaid, invalidating its access token and ending billing."""
-        self.client.item_remove(ItemRemoveRequest(access_token=access_token))
+        self.client.item_remove(
+            ItemRemoveRequest(access_token=access_token),
+            _request_timeout=REQUEST_TIMEOUT,
+        )
 
     def get_accounts(self, access_token: str) -> list[dict]:
         """Fetch all accounts and their balances for a given access token.
@@ -98,7 +106,7 @@ class PlaidService:
         fetch from the institution on every sync.
         """
         request = AccountsGetRequest(access_token=access_token)
-        response = self.client.accounts_get(request)
+        response = self.client.accounts_get(request, _request_timeout=REQUEST_TIMEOUT)
         return [acct.to_dict() for acct in response["accounts"]]
 
     def get_transactions(
@@ -119,7 +127,9 @@ class PlaidService:
             end_date=end_date,
             options=options,
         )
-        response = self.client.transactions_get(request)
+        response = self.client.transactions_get(
+            request, _request_timeout=REQUEST_TIMEOUT
+        )
         raw_txs = [tx.to_dict() for tx in response["transactions"]]
         total_transactions = response.get("total_transactions", len(raw_txs))
 
@@ -132,7 +142,9 @@ class PlaidService:
                 end_date=end_date,
                 options=options,
             )
-            resp = self.client.transactions_get(request)
+            resp = self.client.transactions_get(
+                request, _request_timeout=REQUEST_TIMEOUT
+            )
             page_txs = [tx.to_dict() for tx in resp["transactions"]]
             if not page_txs:
                 break

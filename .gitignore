@@ -13,6 +13,10 @@ venv/
 bridge-data/
 actual-data/
 
+# Per-user Actual Budget assignments written by scripts/actual-users.py
+config/*
+!config/.gitkeep
+
 # Secrets & Environment
 .env
 .env.*
@@ -30,3 +34,4 @@ Thumbs.db
 # AI Tools
 agent.md
 AUDIT_REPORT.md
+SECURITY_REVIEW.md

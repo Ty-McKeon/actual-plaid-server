@@ -1,6 +1,6 @@
 services:
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
     container_name: cloudflared
     restart: unless-stopped
     command: tunnel run
@@ -10,24 +10,20 @@ services:
       budget_net:
         ipv4_address: 172.28.0.50
     
-  actual_server:
-    # Fork of Actual with per-budget-file SimpleFIN credentials. Switch back to
-    # `image: actualbudget/actual-server:latest` once that lands upstream.
-    build:
-      context: https://github.com/Ty-McKeon/actual.git#simplefin-per-budget-file
-      dockerfile: sync-server.Dockerfile
-    container_name: actual_server
+  # Each user gets their own Actual Budget container (`actual_<name>`), started on
+  # demand by the provisioner. Point the tunnel's Actual hostname at
+  # http://caddy:80; Caddy asks the bridge who the request belongs to and proxies
+  # it to that user's container.
+  caddy:
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    container_name: caddy
     restart: unless-stopped
     volumes:
-      - ./actual-data:/data
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
       - budget_net
-    environment:
-      # Optional OpenID login (required for multiple users); blank keeps password login
-      - ACTUAL_OPENID_DISCOVERY_URL=${ACTUAL_OPENID_DISCOVERY_URL:-}
-      - ACTUAL_OPENID_CLIENT_ID=${ACTUAL_OPENID_CLIENT_ID:-}
-      - ACTUAL_OPENID_CLIENT_SECRET=${ACTUAL_OPENID_CLIENT_SECRET:-}
-      - ACTUAL_OPENID_SERVER_HOSTNAME=${ACTUAL_OPENID_SERVER_HOSTNAME:-}
+    depends_on:
+      - flask_bridge
 
   flask_bridge:
     build: ./bridge
@@ -35,8 +31,10 @@ services:
     restart: unless-stopped
     volumes:
       - bridge-data:/data
+      - ./config:/config:ro
     networks:
       - budget_net
+      - provisioner_net
     deploy:
       resources:
         limits:
@@ -47,11 +45,73 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - CLOUDFLARE_TEAM_DOMAIN=${CLOUDFLARE_TEAM_DOMAIN:-}
       - CLOUDFLARE_AUD=${CLOUDFLARE_AUD:-}
+      - CLOUDFLARE_ACTUAL_AUD=${CLOUDFLARE_ACTUAL_AUD:-}
+      - ACTUAL_PROVISIONER_URL=http://provisioner:8090
+      - ACTUAL_SELF_SERVICE=${ACTUAL_SELF_SERVICE:-true}
+
+  # Unprivileged fixed-operation relay; no Docker socket or tenant data access.
+  provisioner:
+    build:
+      context: ./provisioner
+      target: relay
+    container_name: provisioner
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 64m
+    networks:
+      - provisioner_net
+      - docker_control_net
+    environment:
+      - DOCKER_GATEWAY_URL=http://docker_gateway:8091
+    depends_on:
+      docker_gateway:
+        condition: service_healthy
+
+  # The only socket holder. Accepts tenant names, never Docker API requests or
+  # caller-supplied container/network configurations. Policy comes from this file.
+  docker_gateway:
+    build:
+      context: ./provisioner
+      target: gateway
+    restart: unless-stopped
+    stop_grace_period: 45s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 128m
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Used to discover the host bind root; data is never read by the gateway.
+      - ./actual-data/users:/actual-data:ro
+    networks:
+      - docker_control_net
+    environment:
+      - ACTUAL_IMAGE=${ACTUAL_IMAGE:-actualbudget/actual-server@sha256:24645e971da6bb1a1f953d6859e307a0b29be1e8b4130a35b3220c209b5b860c}
+      - ACTUAL_IDLE_MINUTES=${ACTUAL_IDLE_MINUTES:-30}
+      - ACTUAL_MAX_CONTAINERS=${ACTUAL_MAX_CONTAINERS:-10}
+      - ACTUAL_MEMORY_LIMIT_MB=${ACTUAL_MEMORY_LIMIT_MB:-512}
+      - ACTUAL_CPU_LIMIT=${ACTUAL_CPU_LIMIT:-1}
+      - ACTUAL_PIDS_LIMIT=${ACTUAL_PIDS_LIMIT:-256}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
 volumes:
   bridge-data:
 
 networks:
+  # Only the relay can reach the privileged gateway; no published ports.
+  docker_control_net:
+    internal: true
+  # Bridge and provisioner only, with no route to the outside
+  provisioner_net:
+    internal: true
   budget_net:
     driver: bridge
     ipam:

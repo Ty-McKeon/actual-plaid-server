@@ -1,22 +1,28 @@
 """Isolated regression tests: no production database or live provider calls."""
 
 import base64
+import contextlib
+import json
 import os
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
 os.environ["FLASK_DEBUG"] = "1"
 os.environ["DATABASE_URI"] = "sqlite:///:memory:"
-os.environ.pop("ENCRYPTION_KEY", None)
+os.environ["ENCRYPTION_KEY"] = base64.urlsafe_b64encode(os.urandom(32)).decode()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bridge"))
 
+import gunicorn_conf
 import jwt
 import plaid
+import requests
 from app import app, create_app
+from gunicorn.config import Config
 from middleware.auth import validate_cloudflare_jwt
 from models import (
     PlaidItems,
@@ -26,6 +32,7 @@ from models import (
     hash_legacy_simplefin_passwords,
     hash_simplefin_password,
 )
+from services import routing_service
 from services.simplefin_service import (
     format_amount,
     format_balance,
@@ -379,6 +386,259 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(format_amount("0"), "0.00")
         self.assertEqual(format_balance("200", "credit"), "-200.00")
         self.assertEqual(format_balance("-12", "loan"), "12.00")
+
+    def actual_users(self, users):
+        """Points the bridge at a temporary Actual users file with the given content."""
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            handle.write(users if isinstance(users, str) else json.dumps(users))
+        self.addCleanup(os.unlink, handle.name)
+        return patch.dict(os.environ, {"ACTUAL_USERS_FILE": handle.name})
+
+    def access_token(self, audience, email="alice@example.com"):
+        return jwt.encode(
+            {
+                "sub": "user",
+                "email": email,
+                "iss": "https://team.cloudflareaccess.com",
+                "aud": audience,
+                "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+            },
+            "test-key" * 8,
+            algorithm="HS256",
+        )
+
+    def production_access(self, **environ):
+        """Production mode with Access tokens verified against a test signing key."""
+
+        # Use a supported algorithm only inside the test to exercise claim enforcement.
+        def decode_hs(token, key, **kwargs):
+            kwargs["algorithms"] = ["HS256"]
+            return jwt.api_jwt.decode(token, "test-key" * 8, **kwargs)
+
+        stack = contextlib.ExitStack()
+        stack.enter_context(
+            patch.dict(
+                os.environ,
+                {
+                    "FLASK_DEBUG": "0",
+                    "FLASK_ENV": "production",
+                    "DEBUG": "0",
+                    "CLOUDFLARE_TEAM_DOMAIN": "team",
+                    "CLOUDFLARE_AUD": "dashboard",
+                    **environ,
+                },
+            )
+        )
+        stack.enter_context(patch("middleware.auth.get_jwks_client"))
+        stack.enter_context(patch("middleware.auth.jwt.decode", side_effect=decode_hs))
+        return stack
+
+    def test_route_names_the_container_assigned_to_the_user(self):
+        # The development user is user@example.com; lookups ignore case
+        with self.actual_users({"User@Example.com": "alice", "bob@example.com": "bob"}):
+            response = self.client.get(
+                "/auth/route", headers={"X-Actual-Upstream": "actual_bob"}
+            )
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.headers["X-Actual-Upstream"], "actual_alice")
+
+    def test_route_refuses_users_without_a_container(self):
+        cases = [
+            {"bob@example.com": "bob"},
+            {"user@example.com": "../evil"},
+            {"user@example.com": "host:80"},
+            {"user@example.com": 5},
+            "not json",
+            "[]",
+        ]
+        for users in cases:
+            with self.subTest(users=users), self.actual_users(users):
+                response = self.client.get("/auth/route")
+                self.assertEqual(response.status_code, 403)
+                self.assertNotIn("X-Actual-Upstream", response.headers)
+
+        with patch.dict(os.environ, {"ACTUAL_USERS_FILE": "/nonexistent/users.json"}):
+            self.assertEqual(self.client.get("/auth/route").status_code, 403)
+
+    def test_route_requires_a_verified_access_token_in_production(self):
+        with (
+            self.actual_users({"alice@example.com": "alice"}),
+            self.production_access(),
+        ):
+            self.assertEqual(self.client.get("/auth/route").status_code, 401)
+            for token, expected in [
+                (self.access_token("dashboard"), 204),
+                (self.access_token("other-application"), 401),
+                (self.access_token("dashboard", "mallory@example.com"), 403),
+                ("not-a-token", 401),
+            ]:
+                response = self.client.get(
+                    "/auth/route", headers={"Cf-Access-Jwt-Assertion": token}
+                )
+                self.assertEqual(response.status_code, expected)
+
+    def test_service_token_common_name_cannot_select_a_human_container(self):
+        with (
+            self.actual_users({"alice@example.com": "alice"}),
+            patch(
+                "routes.routing.authenticate_request",
+                return_value=(
+                    {"sub": "service", "common_name": "alice@example.com"},
+                    None,
+                ),
+            ),
+        ):
+            self.assertEqual(self.client.get("/auth/route").status_code, 403)
+
+    def test_cloudflare_domain_rejects_url_authority_injection(self):
+        from middleware.auth import get_normalized_team_domain
+
+        for domain in (
+            "evil.example/path",
+            "user@team.cloudflareaccess.com",
+            "team:443",
+        ):
+            with (
+                self.subTest(domain=domain),
+                patch.dict(os.environ, {"CLOUDFLARE_TEAM_DOMAIN": domain}),
+                self.assertRaises(ValueError),
+            ):
+                get_normalized_team_domain()
+
+    def test_route_and_dashboard_each_accept_only_their_own_application(self):
+        actual, dashboard = (self.access_token(aud) for aud in ("actual", "dashboard"))
+        with (
+            self.actual_users({"alice@example.com": "alice"}),
+            self.production_access(CLOUDFLARE_ACTUAL_AUD="actual"),
+        ):
+            for path, token, expected in [
+                ("/auth/route", actual, 204),
+                ("/auth/route", dashboard, 401),
+                ("/api/plaid/items", dashboard, 200),
+                ("/api/plaid/items", actual, 401),
+            ]:
+                response = self.client.get(
+                    path, headers={"Cf-Access-Jwt-Assertion": token}
+                )
+                self.assertEqual(response.status_code, expected, (path, token))
+
+    def test_self_service_gives_unlisted_users_a_generated_container(self):
+        with (
+            self.actual_users({"bob@example.com": "bob"}),
+            patch.dict(os.environ, {"ACTUAL_SELF_SERVICE": "true"}),
+        ):
+            first = self.client.get("/auth/route").headers["X-Actual-Upstream"]
+            again = self.client.get("/auth/route").headers["X-Actual-Upstream"]
+            with patch.dict(os.environ, {"DEV_USER_EMAIL": "USER@example.com"}):
+                same_person = self.client.get("/auth/route").headers
+            with patch.dict(os.environ, {"DEV_USER_EMAIL": "bob@example.com"}):
+                listed = self.client.get("/auth/route").headers["X-Actual-Upstream"]
+            with patch.dict(os.environ, {"DEV_USER_EMAIL": "eve@example.com"}):
+                other = self.client.get("/auth/route").headers["X-Actual-Upstream"]
+
+        self.assertRegex(first, r"^actual_u-[0-9a-f]{16}$")
+        self.assertEqual(first, again)
+        self.assertEqual(first, same_person["X-Actual-Upstream"])
+        self.assertEqual(listed, "actual_bob")
+        self.assertNotEqual(first, other)
+
+    def test_route_starts_the_container_through_the_provisioner(self):
+        routing_service._last_ensured.clear()
+        environ = {"ACTUAL_PROVISIONER_URL": "http://provisioner:8090/"}
+        with (
+            self.actual_users({"user@example.com": "alice"}),
+            patch.dict(os.environ, environ),
+            patch.object(routing_service.requests, "post") as post,
+        ):
+            post.return_value = Mock(status_code=200, ok=True)
+            for _ in range(3):
+                self.assertEqual(self.client.get("/auth/route").status_code, 204)
+
+            # Asked once, then left alone until the heartbeat interval has passed
+            post.assert_called_once()
+            self.assertEqual(
+                post.call_args.args[0],
+                "http://provisioner:8090/containers/alice/ensure",
+            )
+            routing_service._last_ensured["alice"] -= 60
+            self.client.get("/auth/route")
+            self.assertEqual(post.call_count, 2)
+
+    def test_route_reports_a_container_that_cannot_be_started(self):
+        failures = [
+            Mock(status_code=429, ok=False),
+            Mock(status_code=502, ok=False),
+            requests.ConnectionError("refused"),
+        ]
+        environ = {"ACTUAL_PROVISIONER_URL": "http://provisioner:8090"}
+        with (
+            self.actual_users({"user@example.com": "alice"}),
+            patch.dict(os.environ, environ),
+            patch.object(routing_service.requests, "post") as post,
+        ):
+            for failure in failures:
+                routing_service._last_ensured.clear()
+                post.side_effect = [failure]
+                response = self.client.get("/auth/route")
+                self.assertEqual(response.status_code, 503)
+                self.assertNotIn("X-Actual-Upstream", response.headers)
+
+            # A failure is not remembered, so the next request tries again
+            post.side_effect = [Mock(status_code=200, ok=True)]
+            self.assertEqual(self.client.get("/auth/route").status_code, 204)
+
+    def access_log_line(self, method, path, status="200 OK", query=""):
+        """Returns what the production access log records for a request, if anything."""
+        config = Config()
+        config.set("accesslog", "-")
+        config.set("access_log_format", gunicorn_conf.access_log_format)
+        logger = gunicorn_conf.RedactingLogger(config)
+
+        raw_uri = f"{path}?{query}" if query else path
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": query,
+            "RAW_URI": raw_uri,
+            "SERVER_PROTOCOL": "HTTP/1.1",
+            "REMOTE_ADDR": "172.28.0.50",
+        }
+        headers = [
+            ("CF-CONNECTING-IP", "203.0.113.7"),
+            ("AUTHORIZATION", "Basic " + base64.b64encode(b"sfin-user:pw").decode()),
+        ]
+        request = Mock(headers=headers)
+        response = Mock(status=status, sent=0, headers=[])
+
+        with patch.object(logger.access_log, "info") as info:
+            logger.access(response, request, environ, timedelta(milliseconds=12))
+        if not info.called:
+            return None
+        log_format, atoms = info.call_args.args
+        return log_format % atoms
+
+    def test_access_log_identifies_requests_without_recording_credentials(self):
+        line = self.access_log_line(
+            "POST", "/simplefin/claim/0123456789abcdef0123456789abcdef"
+        )
+        self.assertIn('"POST /simplefin/claim/[redacted]" 200', line)
+        self.assertNotIn("0123456789abcdef", line)
+        self.assertIn("172.28.0.50 203.0.113.7", line)
+
+        line = self.access_log_line(
+            "GET", "/simplefin/accounts", query="start-date=1&secret=hunter2"
+        )
+        self.assertIn('"GET /simplefin/accounts" 200', line)
+        self.assertNotIn("hunter2", line)
+        self.assertNotIn("sfin-user", line)
+
+    def test_access_log_skips_only_successful_routing_checks(self):
+        self.assertIsNone(self.access_log_line("GET", "/auth/route", "204 NO CONTENT"))
+        self.assertIn(
+            '"GET /auth/route" 403',
+            self.access_log_line("GET", "/auth/route", "403 FORBIDDEN"),
+        )
+        self.assertIn('"GET /" 200', self.access_log_line("GET", "/"))
 
 
 if __name__ == "__main__":

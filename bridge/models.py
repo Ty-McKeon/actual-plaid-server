@@ -40,10 +40,9 @@ def load_master_key() -> bytes:
     Resolution order:
       1. Container / Docker secret file at `/run/secrets/encryption_key`
       2. Environment variable `ENCRYPTION_KEY`
-      3. Insecure hardcoded development key (only permitted if `FLASK_DEBUG` / `FLASK_ENV` is dev)
 
     Raises:
-        RuntimeError: If no encryption key can be located outside debug mode.
+        RuntimeError: If no encryption key can be located.
 
     Returns:
         bytes: URL-safe base64-encoded 32-byte key for Fernet.
@@ -58,16 +57,11 @@ def load_master_key() -> bytes:
     if env_key:
         return _format_fernet_key(env_key.strip().encode())
 
-    # 3. Fallback dummy key for local development only
-    if (
-        os.getenv("FLASK_DEBUG") in ("1", "true", "True")
-        or os.getenv("FLASK_ENV") == "development"
-        or os.getenv("DEBUG") in ("1", "true", "True")
-    ):
-        return base64.urlsafe_b64encode(b"dev-insecure-master-key-32bytes!")
-
-    # Fail fast if running in production without an encryption key configured
-    raise RuntimeError("Master ENCRYPTION_KEY not found.")
+    # Development databases can contain real financial credentials too. Require a
+    # persistent key instead of a public default or a key lost on every restart.
+    raise RuntimeError(
+        "Master ENCRYPTION_KEY not found (required in all environments)."
+    )
 
 
 # Initialize Fernet cipher with the loaded master encryption key
@@ -122,9 +116,7 @@ class UserPlaidConfigs(db.Model):
             "env": self.plaid_env,
             "has_secret": bool(self.plaid_secret),
             # Never return raw secrets to the frontend
-            "secret_preview": f"••••{self.plaid_secret[-4:]}"
-            if self.plaid_secret
-            else None,
+            "secret_preview": "••••••••" if self.plaid_secret else None,
         }
 
     @classmethod

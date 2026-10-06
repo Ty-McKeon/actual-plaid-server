@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------------------
 # 1. Base Stage: Environment, non-root user, and Python dependencies
 # ------------------------------------------------------------------------------
-FROM python:3.12-slim AS base
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS base
 
 WORKDIR /workspace
 
@@ -67,6 +67,7 @@ CMD ["gunicorn", \
     "--bind=0.0.0.0:8080", \
     "--forwarded-allow-ips=172.28.0.50", \
     "--access-logfile=-", \
+    "--config=gunicorn_conf.py", \
     "--error-logfile=-", \
     "--preload", \
     "app:app"]

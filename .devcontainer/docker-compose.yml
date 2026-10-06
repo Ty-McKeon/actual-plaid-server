@@ -18,7 +18,7 @@ services:
 
     # 2. Expose port 8080 locally so you can test in your Windows browser at http://localhost:8080
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
     # 3. Development overrides
     environment:
@@ -27,6 +27,8 @@ services:
       - PYTHONPATH=/workspace/bridge
       - DATABASE_URI=sqlite:////workspace/bridge-data/bridge.db
       - BASE_URL=http://flask_bridge:8080
+      - ACTUAL_USERS_FILE=/workspace/config/actual-users.json
+      - ACTUAL_PROVISIONER_URL=
 
     # 4. Overrides Gunicorn with an idle loop so the container stays running for VS Code.
     # This lets you press F5 in VS Code to run Flask with full breakpoint debugging.
@@ -37,6 +39,23 @@ services:
   cloudflared:
     profiles: ["production-only"]
 
+  # Per-user routing is only exercised in production
+  caddy:
+    profiles: ["production-only"]
+
+  provisioner:
+    profiles: ["production-only"]
+
+  docker_gateway:
+    profiles: ["production-only"]
+
+  # A single Actual Budget server for local development
   actual_server:
+    image: actualbudget/actual-server@sha256:24645e971da6bb1a1f953d6859e307a0b29be1e8b4130a35b3220c209b5b860c
+    container_name: actual_server
+    volumes:
+      - ./actual-data:/data
+    networks:
+      - budget_net
     ports:
-      - "5006:5006"
+      - "127.0.0.1:5006:5006"

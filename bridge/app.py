@@ -12,7 +12,7 @@ from models import (
     db,
     hash_legacy_simplefin_passwords,
 )
-from routes import plaid_bp, simplefin_bp, user_bp
+from routes import plaid_bp, routing_bp, simplefin_bp, user_bp
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from werkzeug.exceptions import HTTPException
@@ -20,6 +20,10 @@ from werkzeug.exceptions import HTTPException
 # Machine-to-machine SimpleFIN protocol endpoints called by Actual Budget. They carry
 # their own credentials (claim id / HTTP Basic Auth) instead of a Cloudflare session.
 MACHINE_ENDPOINTS = {"simplefin.claim_token", "simplefin.get_accounts"}
+
+# Endpoints that verify the Cloudflare session themselves because they accept the
+# token of a different Access application than the dashboard's.
+SELF_AUTHENTICATED_ENDPOINTS = {"routing.route_actual_user"}
 
 
 @event.listens_for(Engine, "connect")
@@ -47,6 +51,7 @@ def create_app():
     app.register_blueprint(user_bp, url_prefix="/api/user")
     app.register_blueprint(plaid_bp, url_prefix="/api/plaid")
     app.register_blueprint(simplefin_bp, url_prefix="/simplefin")
+    app.register_blueprint(routing_bp, url_prefix="/auth")
 
     # Fallback to the mounted /data folder inside the container
     default_db_uri = "sqlite:////data/bridge.db"
@@ -120,7 +125,7 @@ def prevent_sensitive_response_caching(response):
 
 
 def get_user_credentials():
-    if request.endpoint in MACHINE_ENDPOINTS:
+    if request.endpoint in MACHINE_ENDPOINTS | SELF_AUTHENTICATED_ENDPOINTS:
         return
 
     _, err_response = authenticate_request()
