@@ -2,7 +2,7 @@ import os
 from urllib.parse import urlsplit
 
 from flask import Flask, abort, g, render_template, request
-from models import db
+from models import PlaidItems, SimpleFinCredentials, UserPlaidConfigs, db
 from routes import plaid_bp, simplefin_bp, user_bp
 
 
@@ -14,8 +14,10 @@ def create_app():
     app.register_blueprint(simplefin_bp, url_prefix="/simplefin")
 
     # Fallback to the mounted /data folder inside the container
-    default_db_url = "sqlite:////data/bridge.db"
-    app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", default_db_url)
+    default_db_uri = "sqlite:////data/bridge.db"
+    db_uri = os.getenv("DATABASE_URI", default_db_uri)
+
+    app.config["SQLALCHEMY_DATABASE_URI"] = db_uri
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Initialize app with extensions
@@ -91,7 +93,19 @@ def get_user_credentials():
 
 @app.route("/")
 def dashboard():
-    return render_template("dashboard.html.jinja")
+    config = UserPlaidConfigs.query.filter_by(user_id=g.user_id).first()
+    items = PlaidItems.query.filter_by(user_id=g.user_id).all()
+    credentials = (
+        SimpleFinCredentials.query.filter_by(user_id=g.user_id)
+        .order_by(SimpleFinCredentials.created_at.desc())
+        .all()
+    )
+    return render_template(
+        "dashboard.html.jinja",
+        config=config,
+        items=items,
+        credentials=credentials,
+    )
 
 
 if __name__ == "__main__":

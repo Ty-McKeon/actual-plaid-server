@@ -25,7 +25,8 @@ services:
       - FLASK_DEBUG=1
       - FLASK_ENV=development
       - PYTHONPATH=/workspace/bridge
-      - DATABASE_URL=sqlite:////workspace/bridge-data/bridge.db
+      - DATABASE_URI=sqlite:////workspace/bridge-data/bridge.db
+      - BASE_URL=http://flask_bridge:8080
 
     # 4. Overrides Gunicorn with an idle loop so the container stays running for VS Code.
     # This lets you press F5 in VS Code to run Flask with full breakpoint debugging.

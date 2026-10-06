@@ -10,6 +10,10 @@ def require_json(func):
 
     @wraps(func)
     def wrapper(*args, **kwargs):
+        # Allow HTMX requests from the dashboard UI to send form-encoded data
+        if request.headers.get("HX-Request"):
+            return func(*args, **kwargs)
+
         # 1. Check Content-Type header
         if not request.is_json:
             return (

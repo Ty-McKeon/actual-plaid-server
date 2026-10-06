@@ -1,4 +1,4 @@
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, g, jsonify, render_template, request
 from middleware import require_json
 from models import PlaidItems, UserPlaidConfigs, db
 from services import PlaidService
@@ -8,13 +8,57 @@ plaid_bp = Blueprint("plaid", __name__)
 
 def get_plaid_service_for_user(user_id: str | None = None) -> PlaidService:
     """Retrieves credentials from the DB and returns an initialized PlaidService."""
-    if user_id == None:
+    if user_id is None:
         user_id = g.user_id
 
     config = UserPlaidConfigs.query.filter_by(user_id=user_id).first_or_404(
         description="Plaid credentials not configured."
     )
     return PlaidService.from_config(config)
+
+
+@plaid_bp.get("/items")
+def list_items():
+    """List all connected Plaid institutions for the current user."""
+    items = PlaidItems.query.filter_by(user_id=g.user_id).all()
+    if request.headers.get("HX-Request"):
+        return render_template("partials/connections.html.jinja", items=items)
+
+    return (
+        jsonify(
+            [
+                {
+                    "id": item.id,
+                    "institution_id": item.institution_id,
+                    "institution_name": item.institution_name,
+                    "item_id": item.item_id,
+                }
+                for item in items
+            ]
+        ),
+        200,
+    )
+
+
+@plaid_bp.delete("/items/<int:item_id>")
+def delete_item(item_id: int):
+    """Disconnect / delete a linked institution."""
+    item = PlaidItems.query.filter_by(id=item_id, user_id=g.user_id).first_or_404(
+        description="Linked institution not found."
+    )
+    inst_name = item.institution_name or item.institution_id or "institution"
+    db.session.delete(item)
+    db.session.commit()
+
+    if request.headers.get("HX-Request"):
+        items = PlaidItems.query.filter_by(user_id=g.user_id).all()
+        return render_template(
+            "partials/connections.html.jinja",
+            items=items,
+            success=f"Successfully disconnected {inst_name}.",
+        )
+
+    return jsonify({"status": "deleted", "id": item_id}), 200
 
 
 @plaid_bp.post("/create-link-token")

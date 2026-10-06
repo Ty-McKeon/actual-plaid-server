@@ -1,4 +1,5 @@
 from datetime import date
+
 import plaid
 from plaid.api import plaid_api
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest

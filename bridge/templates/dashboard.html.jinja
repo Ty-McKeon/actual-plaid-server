@@ -4,20 +4,77 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard</title>
+    <title>Actual Budget — Plaid Bridge</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
     <script type="module" src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
 </head>
 
 <body>
-    <div class="setup">
-        <form id="setup-form">
-            <input type="text" name="clientID" placeholder="Plaid Client ID" required />
-            <input type="password" name="secret" placeholder="Plaid Secret" required />
-            <button type="submit">Save & Verify</button>
-        </form>
+    <div class="app-layout">
+        <header class="app-header">
+            <div class="header-container">
+                <div class="brand">
+                    <div class="brand-icon-wrap">
+                        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="1" x2="12" y2="23"></line>
+                            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                        </svg>
+                    </div>
+                    <div class="brand-text">
+                        <h1 class="brand-title">Actual Budget Plaid Bridge</h1>
+                        <span class="brand-subtitle">Plaid to SimpleFIN Sync Dashboard</span>
+                    </div>
+                </div>
+
+                <div class="header-meta">
+                    <div class="user-pill" title="Authenticated User">
+                        <svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                        <span>{{ g.email or 'user@example.com' }}</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main class="dashboard-main">
+            <!-- Global Toast Container -->
+            <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+            <div class="dashboard-grid">
+                <!-- Left Column: Plaid Setup & Linking -->
+                <div class="dashboard-column">
+                    <section id="setup-form-container" class="dashboard-card">
+                        {% include "partials/setup-form.html.jinja" %}
+                    </section>
+
+                    <section id="link-account-container" class="dashboard-card">
+                        {% include "partials/link-account.html.jinja" %}
+                    </section>
+                </div>
+
+                <!-- Right Column: SimpleFIN Actual Budget Integration -->
+                <div class="dashboard-column">
+                    <section id="simplefin-sync-container" class="dashboard-card">
+                        {% include "partials/simplefin-sync.html.jinja" %}
+                    </section>
+                </div>
+            </div>
+
+            <!-- Full-Width Section: Connected Financial Institutions -->
+            <section id="connections-container" class="dashboard-card full-width">
+                {% include "partials/connections.html.jinja" %}
+            </section>
+        </main>
+
+        <footer class="app-footer">
+            <div class="footer-container">
+                <p>Actual Budget Plaid Bridge &bull; SimpleFIN Data Format (SDF) Protocol &bull; End-to-End Encrypted</p>
+            </div>
+        </footer>
     </div>
-    <button id="link-btn">Link Account</button>
-    <div class="connections"></div>
 </body>
 
 </html>

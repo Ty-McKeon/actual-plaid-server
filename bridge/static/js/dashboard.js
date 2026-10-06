@@ -1,27 +1,99 @@
 import loadPlaid from "./plaidLoader.js";
 
-await loadPlaid();
+// ============================================================================
+// Toast Notification Helper
+// ============================================================================
 
-const form = document.getElementById("setup-form");
-form.addEventListener("submit", async function (e) {
-    e.preventDefault();
+export function showToast(message, type = "info") {
+    const container = document.getElementById("toast-container");
+    if (!container) return;
 
-    const formData = new FormData(form);
-    const formObject = Object.fromEntries(formData);
-    const formJSON = JSON.stringify(formObject);
+    const toast = document.createElement("div");
+    toast.className = `toast toast-${type}`;
+    toast.setAttribute("role", "alert");
 
-    const res = await fetch("/api/user/plaid-config", {
-        method: "PUT",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: formJSON,
+    const messageSpan = document.createElement("span");
+    messageSpan.className = "toast-message";
+    messageSpan.textContent = message;
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "toast-close";
+    closeBtn.setAttribute("aria-label", "Close notification");
+    closeBtn.innerHTML = "&times;";
+    closeBtn.addEventListener("click", () => toast.remove());
+
+    toast.appendChild(messageSpan);
+    toast.appendChild(closeBtn);
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add("toast-fadeout");
+        setTimeout(() => toast.remove(), 350);
+    }, 4500);
+}
+
+window.showToast = showToast;
+
+// ============================================================================
+// Copy to Clipboard Helper
+// ============================================================================
+
+window.copyToClipboard = function (elementId, button) {
+    const input = document.getElementById(elementId);
+    if (!input) return;
+
+    const textToCopy = input.value;
+
+    function handleSuccess() {
+        const copyTextEl = button?.querySelector(".copy-text");
+        const originalText = copyTextEl ? copyTextEl.textContent : "Copy";
+
+        if (copyTextEl) copyTextEl.textContent = "Copied!";
+        button?.classList.add("btn-copied");
+
+        showToast("Setup token copied to clipboard!", "success");
+
+        setTimeout(() => {
+            if (copyTextEl) copyTextEl.textContent = originalText;
+            button?.classList.remove("btn-copied");
+        }, 2500);
+    }
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard
+            .writeText(textToCopy)
+            .then(handleSuccess)
+            .catch(() => fallbackCopy(input, handleSuccess));
+    } else {
+        fallbackCopy(input, handleSuccess);
+    }
+};
+
+function fallbackCopy(input, callback) {
+    input.focus();
+    input.select();
+    try {
+        const successful = document.execCommand("copy");
+        if (successful && callback) callback();
+    } catch (err) {
+        showToast("Failed to copy token. Please copy manually.", "error");
+    }
+}
+
+// ============================================================================
+// Plaid Link Workflow
+// ============================================================================
+
+let plaidLoaded = false;
+
+loadPlaid()
+    .then(() => {
+        plaidLoaded = true;
+    })
+    .catch((err) => {
+        console.warn("Could not load Plaid SDK:", err);
     });
-
-    const data = await res.json(); // TODO implement error handling logic
-
-    this.reset();
-});
 
 async function sendPublicToken(public_token, metadata) {
     const res = await fetch("/api/plaid/exchange-public-token", {
@@ -31,35 +103,133 @@ async function sendPublicToken(public_token, metadata) {
         },
         body: JSON.stringify({
             public_token: public_token,
-            institution_id: metadata.institution?.institution_id,
-            institution_name: metadata.institution?.name,
+            institution_id: metadata?.institution?.institution_id,
+            institution_name: metadata?.institution?.name,
         }),
     });
+
+    if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to exchange public token");
+    }
 
     return res;
 }
 
-const linkBtn = document.getElementById("link-btn");
-linkBtn.addEventListener("click", async (e) => {
+function setLinkButtonLoading(isLoading) {
+    const linkBtn = document.getElementById("link-btn");
+    const linkSpinner = document.getElementById("link-spinner");
+    const linkBtnText = document.getElementById("link-btn-text");
+
+    if (!linkBtn) return;
+
+    if (isLoading) {
+        linkBtn.disabled = true;
+        if (linkSpinner) linkSpinner.style.display = "inline-block";
+        if (linkBtnText) linkBtnText.textContent = "Connecting...";
+    } else {
+        linkBtn.disabled = false;
+        if (linkSpinner) linkSpinner.style.display = "none";
+        if (linkBtnText) linkBtnText.textContent = "Link Bank Account";
+    }
+}
+
+// Use event delegation for #link-btn so dynamically re-rendered elements work
+document.addEventListener("click", async (e) => {
+    const linkBtn = e.target.closest("#link-btn");
+    if (!linkBtn || linkBtn.disabled) return;
+
     e.preventDefault();
 
-    // grab link token from server
-    const res = await fetch("/api/plaid/create-link-token", {
-        method: "POST",
-    });
+    if (!plaidLoaded && !window.Plaid) {
+        try {
+            await loadPlaid();
+            plaidLoaded = true;
+        } catch (err) {
+            showToast("Failed to load Plaid Link SDK. Please check your network connection.", "danger");
+            return;
+        }
+    }
 
-    const { link_token } = await res.json();
+    setLinkButtonLoading(true);
 
-    // handle user bank login through plaid
-    const handler = Plaid.create({
-        token: link_token,
-        onSuccess: sendPublicToken,
-        onLoad: () => {},
-        onExit: (err, metadata) => {
-            console.log("Error");
-        },
-        onEvent: (eventName, metadata) => {},
-    });
+    try {
+        const res = await fetch("/api/plaid/create-link-token", {
+            method: "POST",
+        });
 
-    handler.open();
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || "Could not initialize Plaid session. Ensure credentials are configured.", "danger");
+            setLinkButtonLoading(false);
+            return;
+        }
+
+        const { link_token } = await res.json();
+
+        const handler = window.Plaid.create({
+            token: link_token,
+            onSuccess: async (public_token, metadata) => {
+                try {
+                    await sendPublicToken(public_token, metadata);
+                    const instName = metadata?.institution?.name || "Financial Institution";
+                    showToast(`Successfully connected ${instName}!`, "success");
+
+                    // Trigger HTMX refresh of the connections container
+                    if (window.htmx) {
+                        window.htmx.ajax("GET", "/api/plaid/items", {
+                            target: "#connections-container",
+                            swap: "innerHTML",
+                        });
+                    }
+                } catch (exchangeErr) {
+                    showToast(exchangeErr.message || "Failed to finalize institution connection.", "danger");
+                } finally {
+                    setLinkButtonLoading(false);
+                }
+            },
+            onExit: (err, metadata) => {
+                setLinkButtonLoading(false);
+                if (err) {
+                    console.error("Plaid Link Exit Error:", err);
+                    showToast(err.display_message || "Plaid Link connection cancelled or failed.", "warning");
+                }
+            },
+            onEvent: (eventName, metadata) => {},
+        });
+
+        handler.open();
+    } catch (err) {
+        console.error("Link error:", err);
+        showToast("An unexpected error occurred while starting Plaid Link.", "danger");
+        setLinkButtonLoading(false);
+    }
+});
+
+// ============================================================================
+// HTMX Global Event Listeners
+// ============================================================================
+
+document.addEventListener("htmx:afterSwap", (e) => {
+    // If the setup form was updated and succeeded, refresh the link account box if needed
+    if (e.detail.target.id === "setup-form-container") {
+        const linkBtn = document.getElementById("link-btn");
+        const isConfigured = document.querySelector(".badge-success") !== null;
+        if (linkBtn && isConfigured) {
+            linkBtn.disabled = false;
+        }
+    }
+});
+
+document.addEventListener("htmx:responseError", (e) => {
+    const errorText = e.detail.xhr?.responseText;
+    try {
+        const parsed = JSON.parse(errorText);
+        showToast(parsed.error || parsed.message || "Request failed.", "danger");
+    } catch {
+        // Fallback for non-JSON errors
+        if (e.detail.xhr?.status >= 400 && e.detail.xhr?.status !== 422) {
+            showToast("Server request failed. Please check your credentials or logs.", "danger");
+        }
+    }
 });

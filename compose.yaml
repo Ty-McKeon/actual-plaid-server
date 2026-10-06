@@ -24,7 +24,7 @@ services:
     container_name: flask_bridge
     restart: unless-stopped
     volumes:
-      - ./bridge-data:/app/data
+      - ./bridge-data:/data
     networks:
       - budget_net
     deploy:
@@ -33,6 +33,7 @@ services:
           memory: 200M # 200MB memory limit
     environment:
       - DATABASE_URI=sqlite:////data/bridge.db
+      - BASE_URL=${BASE_URL:-http://flask_bridge:8080}
 
 networks:
   budget_net:

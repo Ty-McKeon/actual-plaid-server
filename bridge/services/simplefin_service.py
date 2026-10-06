@@ -9,7 +9,23 @@ from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from flask import request
+
+def get_base_url() -> str:
+    """Retrieves and normalizes the BASE_URL for SimpleFIN URLs.
+
+    Ensures that a valid HTTP/HTTPS scheme is present and trailing slashes
+    or redundant /simplefin suffixes are properly handled.
+    """
+    base_url = os.getenv("BASE_URL", "").strip()
+    if not base_url:
+        base_url = "http://flask_bridge:8080"
+    elif not base_url.startswith(("http://", "https://")):
+        base_url = f"http://{base_url}"
+
+    base_url = base_url.rstrip("/")
+    base_url = base_url.removesuffix("/simplefin")
+
+    return base_url
 
 
 def build_claim_url(claim_id: str) -> str:
@@ -21,11 +37,7 @@ def build_claim_url(claim_id: str) -> str:
     Returns:
         Full claim URL string.
     """
-    base_url = os.getenv("BASE_URL")
-    if not base_url:
-        base_url = request.host_url.rstrip("/")
-    else:
-        base_url = base_url.rstrip("/")
+    base_url = get_base_url()
     return f"{base_url}/simplefin/claim/{claim_id}"
 
 
@@ -39,18 +51,12 @@ def build_access_url(username: str, password: str) -> str:
     Returns:
         Full Access URL string containing embedded basic auth credentials.
     """
-    base_url = os.getenv("BASE_URL")
-    if not base_url:
-        host = request.host
-        scheme = request.scheme
-        return f"{scheme}://{username}:{password}@{host}/simplefin"
-    else:
-        parts = urlsplit(base_url)
-        netloc = f"{username}:{password}@{parts.netloc}"
-        path = parts.path.rstrip("/")
-        if not path.endswith("/simplefin"):
-            path = f"{path}/simplefin"
-        return urlunsplit((parts.scheme, netloc, path, parts.query, parts.fragment))
+    base_url = get_base_url()
+    parts = urlsplit(base_url)
+    netloc = f"{username}:{password}@{parts.netloc}"
+    base_path = parts.path.rstrip("/")
+    path = f"{base_path}/simplefin"
+    return urlunsplit((parts.scheme, netloc, path, parts.query, parts.fragment))
 
 
 def format_amount(amount: float | str) -> str:
@@ -115,12 +121,17 @@ def map_plaid_transaction_to_simplefin(tx: dict) -> dict:
 def map_plaid_account_to_simplefin(
     account: dict,
     transactions: list[dict] | None = None,
+    institution_name: str | None = None,
+    institution_id: str | None = None,
 ) -> dict:
     """Transforms a Plaid account dictionary and its transactions into SimpleFIN format."""
     balances = account.get("balances", {})
     current_balance = balances.get("current", 0.0)
     available_balance = balances.get("available")
     acct_type = str(account.get("type", "")).lower()
+
+    inst_name = institution_name or account.get("name") or "Financial Institution"
+    inst_id = institution_id or str(account.get("account_id", ""))
 
     mapped: dict[str, Any] = {
         "id": str(account.get("account_id", "")),
@@ -133,6 +144,13 @@ def map_plaid_account_to_simplefin(
         "transactions": [
             map_plaid_transaction_to_simplefin(t) for t in (transactions or [])
         ],
+        "org": {
+            "name": inst_name,
+            "domain": inst_id,
+            "id": inst_id,
+            "sfin-url": "",
+            "url": "",
+        },
     }
     if available_balance is not None:
         mapped["available-balance"] = format_balance(available_balance, acct_type)

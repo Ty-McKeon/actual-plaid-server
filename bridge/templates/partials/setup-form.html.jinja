@@ -1,0 +1,152 @@
+{# Plaid API Configuration Component #}
+<div class="card-header">
+    <div class="card-title-group">
+        <h2 class="card-title">
+            <svg class="icon icon-title" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            Plaid API Credentials
+        </h2>
+        <p class="card-subtitle">Manage your Plaid developer keys and sync environment</p>
+    </div>
+    {% if config and config.plaid_client_id and not edit %}
+        <span class="badge badge-success">
+            <span class="badge-dot badge-dot-active"></span> Configured
+        </span>
+    {% else %}
+        <span class="badge badge-warning">
+            <span class="badge-dot"></span> Not Configured
+        </span>
+    {% endif %}
+</div>
+
+{% if success %}
+    <div class="alert alert-success" role="alert">
+        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <span>{{ success }}</span>
+    </div>
+{% endif %}
+
+{% if error %}
+    <div class="alert alert-danger" role="alert">
+        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <span>{{ error }}</span>
+    </div>
+{% endif %}
+
+{% if config and config.plaid_client_id and not edit %}
+    {# Display / View Mode #}
+    <div class="config-summary">
+        <div class="summary-grid">
+            <div class="summary-item">
+                <span class="summary-label">Client ID</span>
+                <span class="summary-value code-font">{{ config.plaid_client_id }}</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Secret</span>
+                <span class="summary-value code-font">
+                    {% if config.plaid_secret %}
+                        ••••••••••••{{ config.plaid_secret[-4:] }}
+                    {% else %}
+                        ••••••••
+                    {% endif %}
+                </span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Environment</span>
+                <span class="summary-value">
+                    <span class="badge badge-neutral text-uppercase">{{ config.plaid_env or 'sandbox' }}</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="card-actions">
+            <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                hx-get="{{ url_for('user.get_user_config', edit='true') }}"
+                hx-target="#setup-form-container"
+                hx-swap="innerHTML"
+            >
+                <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+                Edit Credentials
+            </button>
+        </div>
+    </div>
+{% else %}
+    {# Edit / Create Form Mode #}
+    <form
+        id="setup-form"
+        hx-put="{{ url_for('user.upsert_user_config') }}"
+        hx-target="#setup-form-container"
+        hx-swap="innerHTML"
+        hx-indicator="#setup-spinner"
+        class="form-stack"
+    >
+        <div class="form-group">
+            <label for="clientID" class="form-label">Plaid Client ID</label>
+            <input
+                type="text"
+                id="clientID"
+                name="clientID"
+                class="form-control"
+                placeholder="e.g. 5f8a9b1c2d3e4f5a6b7c8d9e"
+                value="{{ config.plaid_client_id if config and config.plaid_client_id else '' }}"
+                required
+                autocomplete="off"
+                spellcheck="false"
+            />
+        </div>
+
+        <div class="form-group">
+            <label for="secret" class="form-label">Plaid Secret</label>
+            <input
+                type="password"
+                id="secret"
+                name="secret"
+                class="form-control"
+                placeholder="Plaid Secret key"
+                required
+                autocomplete="new-password"
+            />
+            <small class="form-hint">Stored securely using AES/Fernet encryption at rest.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="env" class="form-label">Plaid Environment</label>
+            <select id="env" name="env" class="form-control">
+                <option value="sandbox" {% if not config or config.plaid_env == 'sandbox' %}selected{% endif %}>Sandbox (Testing)</option>
+                <option value="production" {% if config and config.plaid_env == 'production' %}selected{% endif %}>Production (Live Accounts)</option>
+            </select>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="save-credentials-btn">
+                <span class="btn-text">Save & Verify</span>
+                <span id="setup-spinner" class="htmx-indicator spinner"></span>
+            </button>
+
+            {% if config and config.plaid_client_id %}
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    hx-get="{{ url_for('user.get_user_config') }}"
+                    hx-target="#setup-form-container"
+                    hx-swap="innerHTML"
+                >
+                    Cancel
+                </button>
+            {% endif %}
+        </div>
+    </form>
+{% endif %}

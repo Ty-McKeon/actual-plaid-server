@@ -37,7 +37,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import plaid
-from flask import Blueprint, Response, abort, g, jsonify, request
+from flask import Blueprint, Response, abort, g, jsonify, render_template, request
 from models import PlaidItems, SimpleFinCredentials, UserPlaidConfigs, db
 from services import (
     PlaidService,
@@ -76,6 +76,37 @@ def _verify_basic_auth() -> SimpleFinCredentials | None:
 # ============================================================================
 
 
+@simplefin_bp.get("/tokens")
+def get_tokens():
+    """List SimpleFIN credentials/tokens for the user or render partial."""
+    user_id = g.user_id
+    all_credentials = (
+        SimpleFinCredentials.query.filter_by(user_id=user_id)
+        .order_by(SimpleFinCredentials.created_at.desc())
+        .all()
+    )
+    if request.headers.get("HX-Request"):
+        return render_template(
+            "partials/simplefin-sync.html.jinja",
+            credentials=all_credentials,
+        )
+
+    return (
+        jsonify(
+            [
+                {
+                    "id": c.id,
+                    "claim_id": c.claim_id,
+                    "is_claimed": c.is_claimed,
+                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                }
+                for c in all_credentials
+            ]
+        ),
+        200,
+    )
+
+
 @simplefin_bp.post("/token")
 def create_setup_token():
     """Generates a new SimpleFIN Setup Token for the authenticated user.
@@ -98,6 +129,22 @@ def create_setup_token():
 
     claim_url = build_claim_url(claim_id)
     setup_token = base64.b64encode(claim_url.encode("utf-8")).decode("utf-8")
+
+    if request.headers.get("HX-Request"):
+        all_credentials = (
+            SimpleFinCredentials.query.filter_by(user_id=user_id)
+            .order_by(SimpleFinCredentials.created_at.desc())
+            .all()
+        )
+        return (
+            render_template(
+                "partials/simplefin-sync.html.jinja",
+                setup_token=setup_token,
+                credentials=all_credentials,
+                success="New SimpleFIN setup token generated! Copy it below to connect Actual Budget.",
+            ),
+            201,
+        )
 
     return jsonify({"setup_token": setup_token, "claim_url": claim_url}), 201
 
@@ -167,7 +214,7 @@ def get_accounts():
     if end_date_epoch:
         end_date = datetime.fromtimestamp(end_date_epoch, tz=timezone.utc).date()
     else:
-        end_date = datetime.now(tz=timezone.utc)
+        end_date = datetime.now(tz=timezone.utc).date()
 
     if start_date_epoch:
         start_date = datetime.fromtimestamp(start_date_epoch, tz=timezone.utc).date()
@@ -236,7 +283,12 @@ def get_accounts():
             for acct in plaid_accounts:
                 acct_id = acct.get("account_id")
                 acct_txs = tx_by_account.get(acct_id, [])
-                sdf_account = map_plaid_account_to_simplefin(acct, acct_txs)
+                sdf_account = map_plaid_account_to_simplefin(
+                    account=acct,
+                    transactions=acct_txs,
+                    institution_name=item.institution_name,
+                    institution_id=item.institution_id or item.item_id,
+                )
                 sdf_accounts.append(sdf_account)
 
         except plaid.ApiException as item_err:

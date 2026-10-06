@@ -46,7 +46,7 @@ FROM base AS production
 WORKDIR /app
 
 # Create the data directory for SQLite and set ownership
-RUN mkdir -p /app/data && chown -R appuser:appgroup /app
+RUN mkdir -p /data && chown -R appuser:appgroup /app && chown -R appuser:appgroup /data
 
 # Copy application source code
 COPY --chown=appuser:appgroup . .
