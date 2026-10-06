@@ -68,4 +68,5 @@ CMD ["gunicorn", \
     "--forwarded-allow-ips=172.28.0.50", \
     "--access-logfile=-", \
     "--error-logfile=-", \
+    "--preload", \
     "app:app"]

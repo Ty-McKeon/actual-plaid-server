@@ -11,13 +11,23 @@ services:
         ipv4_address: 172.28.0.50
     
   actual_server:
-    image: actualbudget/actual-server:latest
+    # Fork of Actual with per-budget-file SimpleFIN credentials. Switch back to
+    # `image: actualbudget/actual-server:latest` once that lands upstream.
+    build:
+      context: https://github.com/Ty-McKeon/actual.git#simplefin-per-budget-file
+      dockerfile: sync-server.Dockerfile
     container_name: actual_server
     restart: unless-stopped
     volumes:
       - ./actual-data:/data
     networks:
       - budget_net
+    environment:
+      # Optional OpenID login (required for multiple users); blank keeps password login
+      - ACTUAL_OPENID_DISCOVERY_URL=${ACTUAL_OPENID_DISCOVERY_URL:-}
+      - ACTUAL_OPENID_CLIENT_ID=${ACTUAL_OPENID_CLIENT_ID:-}
+      - ACTUAL_OPENID_CLIENT_SECRET=${ACTUAL_OPENID_CLIENT_SECRET:-}
+      - ACTUAL_OPENID_SERVER_HOSTNAME=${ACTUAL_OPENID_SERVER_HOSTNAME:-}
 
   flask_bridge:
     build: ./bridge
