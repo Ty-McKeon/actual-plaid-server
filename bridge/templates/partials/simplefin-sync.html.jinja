@@ -1,0 +1,130 @@
+{# Actual Budget SimpleFIN Sync Component #}
+<div class="card-header">
+    <div class="card-title-group">
+        <h2 class="card-title">
+            <svg class="icon icon-title" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+            Actual Budget Bank Sync
+        </h2>
+        <p class="card-subtitle">Connect your Actual Budget instance via SimpleFIN (SDF) protocol</p>
+    </div>
+    <span class="badge badge-info">SimpleFIN Protocol</span>
+</div>
+
+{% if success %}
+    <div class="alert alert-success" role="alert">
+        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <span>{{ success }}</span>
+    </div>
+{% endif %}
+
+<div class="simplefin-content">
+    <div class="simplefin-actions">
+        <p class="section-explanation">
+            Generate a single-use SimpleFIN Setup Token to configure bank sync in Actual Budget.
+        </p>
+        <button
+            type="button"
+            class="btn btn-primary"
+            hx-post="{{ url_for('simplefin.create_setup_token') }}"
+            hx-target="#simplefin-sync-container"
+            hx-swap="innerHTML"
+            hx-indicator="#token-spinner"
+        >
+            <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 2l-2 2m-2-2l2 2"></path>
+                <path d="M3 7l5 5"></path>
+                <path d="M15 11l-3 3"></path>
+                <path d="M7 11l-4 4 3 3 4-4"></path>
+                <path d="M11 15l4-4 6 6-3 3-7-5z"></path>
+            </svg>
+            <span class="btn-text">Generate Setup Token</span>
+            <span id="token-spinner" class="htmx-indicator spinner"></span>
+        </button>
+    </div>
+
+    {% if setup_token %}
+        <div class="token-result-box">
+            <div class="token-header">
+                <span class="token-label">SimpleFIN Setup Token</span>
+                <span class="badge badge-success badge-sm">Ready to Claim</span>
+            </div>
+            <div class="token-input-group">
+                <input
+                    type="text"
+                    id="setup-token-display"
+                    class="form-control code-font"
+                    value="{{ setup_token }}"
+                    readonly
+                    spellcheck="false"
+                />
+                <button
+                    type="button"
+                    class="btn btn-secondary copy-btn"
+                    onclick="copyToClipboard('setup-token-display', this)"
+                >
+                    <svg class="icon icon-sm copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    <span class="copy-text">Copy</span>
+                </button>
+            </div>
+
+            <div class="setup-instructions">
+                <strong>Next Steps in Actual Budget:</strong>
+                <ol class="instructions-list">
+                    <li>Open your Actual Budget instance.</li>
+                    <li>Go to <strong>Settings</strong> &gt; <strong>Bank Sync</strong>.</li>
+                    <li>Select <strong>SimpleFIN</strong> provider and paste this setup token.</li>
+                    <li>Actual Budget will automatically exchange the token and begin syncing accounts!</li>
+                </ol>
+            </div>
+        </div>
+    {% endif %}
+
+    <div class="sync-credentials-section">
+        <h4 class="subheading">Sync Credentials History</h4>
+        {% if credentials and credentials|length > 0 %}
+            <div class="credentials-table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Claim ID</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for cred in credentials %}
+                            <tr>
+                                <td class="code-font text-sm">{{ cred.claim_id[:12] }}…</td>
+                                <td>
+                                    {% if cred.is_claimed %}
+                                        <span class="badge badge-success badge-sm">
+                                            <span class="badge-dot badge-dot-active"></span> Claimed / Active
+                                        </span>
+                                    {% else %}
+                                        <span class="badge badge-warning badge-sm">
+                                            <span class="badge-dot"></span> Pending Claim
+                                        </span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-muted text-sm">
+                                    {{ cred.created_at.strftime('%Y-%m-%d %H:%M') if cred.created_at else '—' }}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="text-muted text-sm">No sync tokens have been generated yet.</p>
+        {% endif %}
+    </div>
+</div>

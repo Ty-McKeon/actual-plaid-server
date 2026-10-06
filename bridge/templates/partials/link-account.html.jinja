@@ -1,0 +1,57 @@
+{# Plaid Link Account Action Component #}
+<div class="card-header">
+    <div class="card-title-group">
+        <h2 class="card-title">
+            <svg class="icon icon-title" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 21h18"></path>
+                <path d="M3 10h18"></path>
+                <path d="M5 6l7-3 7 3"></path>
+                <path d="M4 10v11"></path>
+                <path d="M20 10v11"></path>
+                <path d="M8 14v4"></path>
+                <path d="M12 14v4"></path>
+                <path d="M16 14v4"></path>
+            </svg>
+            Link Bank Account
+        </h2>
+        <p class="card-subtitle">Connect checking, savings, credit cards, or loans via Plaid</p>
+    </div>
+</div>
+
+<div class="link-account-content">
+    {% if not config or not config.plaid_client_id %}
+        <div class="notice-box notice-warning">
+            <svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            <div>
+                <strong>Plaid Configuration Required</strong>
+                <p>Please enter and verify your Plaid Client ID and Secret before linking a bank account.</p>
+            </div>
+        </div>
+        <button id="link-btn" class="btn btn-primary" disabled title="Configure Plaid credentials first">
+            <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            Link Bank Account
+        </button>
+    {% else %}
+        <p class="link-description">
+            Launch Plaid Link to securely authenticate with your financial institution. Access tokens are encrypted at rest.
+        </p>
+        <div class="link-action-wrap">
+            <button id="link-btn" class="btn btn-primary btn-lg">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                <span id="link-btn-text">Link Bank Account</span>
+                <span id="link-spinner" class="spinner" style="display: none;"></span>
+            </button>
+        </div>
+    {% endif %}
+    <div id="link-status-message"></div>
+</div>
