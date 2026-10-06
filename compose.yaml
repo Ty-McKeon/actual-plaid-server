@@ -24,7 +24,7 @@ services:
     container_name: flask_bridge
     restart: unless-stopped
     volumes:
-      - ./bridge-data:/data
+      - bridge-data:/data
     networks:
       - budget_net
     deploy:
@@ -37,6 +37,9 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - CLOUDFLARE_TEAM_DOMAIN=${CLOUDFLARE_TEAM_DOMAIN:-}
       - CLOUDFLARE_AUD=${CLOUDFLARE_AUD:-}
+
+volumes:
+  bridge-data:
 
 networks:
   budget_net:
