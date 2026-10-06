@@ -2,10 +2,12 @@
 
 import base64
 import os
+from datetime import datetime, timezone
 from pathlib import Path
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.types import TypeDecorator, String
+
 from cryptography.fernet import Fernet
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.types import String, TypeDecorator
 
 # Initialize SQLAlchemy database instance
 db = SQLAlchemy()
@@ -18,10 +20,9 @@ def _format_fernet_key(key: bytes) -> bytes:
         if len(decoded) == 32:
             return key
     except Exception:
-        pass
-    # If the provided key is already 32 raw bytes, base64-encode it
-    if len(key) == 32:
-        return base64.urlsafe_b64encode(key)
+        # If the provided key is already 32 raw bytes, base64-encode it
+        if len(key) == 32:
+            return base64.urlsafe_b64encode(key)
     return key
 
 
@@ -92,12 +93,16 @@ class UserPlaidConfigs(db.Model):
 
     # Cloudflare Access Subject (`sub` claim) identifying the authenticated user
     user_id = db.Column(db.String(128), primary_key=True)
+
     # User's email address from authentication headers
     user_email = db.Column(db.String(255), nullable=False)
+
     # Plaid client ID if configured on a per-user basis
     plaid_client_id = db.Column(db.String(128), nullable=True)
+
     # Encrypted Plaid API secret key
     plaid_secret = db.Column(EncryptedString(512), nullable=True)
+
     # Plaid environment to target: 'sandbox', 'development', or 'production'
     plaid_env = db.Column(db.String(32), default="sandbox")
 
@@ -109,7 +114,9 @@ class UserPlaidConfigs(db.Model):
             "env": self.plaid_env,
             "has_secret": bool(self.plaid_secret),
             # Never return raw secrets to the frontend
-            "secret_preview": f"••••{self.plaid_secret[-4:]}" if self.plaid_secret else None,
+            "secret_preview": f"••••{self.plaid_secret[-4:]}"
+            if self.plaid_secret
+            else None,
         }
 
     @classmethod
@@ -127,13 +134,43 @@ class PlaidItems(db.Model):
 
     # Unique identifier for the local record
     id = db.Column(db.Integer, primary_key=True)
+
     # User ID referencing the owner in UserPlaidConfig
-    user_id = db.Column(db.String(128), db.ForeignKey("user_plaid_configs.user_id"), nullable=False)
+    user_id = db.Column(
+        db.String(128), db.ForeignKey("user_plaid_configs.user_id"), nullable=False
+    )
+
     # Plaid-assigned item identifier returned upon public token exchange
     item_id = db.Column(db.String(128), unique=True, nullable=False)
+
     # Plaid financial institution identifier (e.g. 'ins_109508')
     institution_id = db.Column(db.String(64), nullable=True)
+
     # Human-readable name of the bank or financial institution
     institution_name = db.Column(db.String(255), nullable=True)
+
     # Encrypted access token used to query accounts and transactions for this Item
     access_token = db.Column(EncryptedString(512), nullable=False)
+
+
+class SimpleFinCredentials(db.Model):
+    """
+    User configuration and credentials for the SimpleFIN API.
+
+    Stores authentication metadata and user-specific SimpleFIN credentials.
+    """
+
+    # 1. Internal surrogate PK
+    id = db.Column(db.Integer, primary_key=True)
+
+    # 2. Scoped to the user (indexed, not unique)
+    user_id = db.Column(db.String, nullable=False, index=True)
+
+    # 3. Lookup tokens (indexed & unique for fast resolution)
+    claim_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    username = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    password = db.Column(db.String(64), nullable=False)
+
+    # 4. Lifecycle state
+    is_claimed = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))

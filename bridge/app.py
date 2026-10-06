@@ -1,11 +1,16 @@
 import os
-from routes import user_bp, plaid_bp
-from flask import Flask, request, render_template, abort, g
+
+from flask import Flask, abort, g, render_template, request
 from models import db
+from routes import plaid_bp, user_bp
+from urllib.parse import urlsplit
 
 
 def create_app():
     app = Flask(__name__)
+
+    app.register_blueprint(user_bp, url_prefix="/api/user")
+    app.register_blueprint(plaid_bp, url_prefix="/api/plaid")
 
     # Fallback to the mounted /data folder inside the container
     default_db_url = "sqlite:////data/bridge.db"
@@ -27,26 +32,49 @@ def create_app():
             cursor.execute("PRAGMA foreign_keys=ON;")
             cursor.close()
 
-        # Create sqlite3 databse and tables if they do not exist already
+        # Create sqlite3 database and tables if they do not exist already
         db.create_all()
 
     return app
 
 
 app = create_app()
-app.register_blueprint(user_bp)
-app.register_blueprint(plaid_bp)
+
+
+# Add any external trusted domains (e.g., your separate frontend or payment gateways)
+ALLOWED_ORIGINS = {
+    # "https://frontend.example.com",
+}
 
 
 @app.before_request
 def check_csrf_origins():
-    if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
-        origin = request.headers.get("Origin")
-        fetch_site = request.headers.get("Sec-Fetch-Site")
+    # Only protect state-changing requests
+    if request.method not in ["POST", "PUT", "DELETE", "PATCH"]:
+        return
 
-        # Block any explicit cross-site fetch
-        if fetch_site and fetch_site not in ["same-origin", "same-site", "none"]:
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+
+    # 1. Modern browser check via Fetch Metadata
+    if fetch_site:
+        if fetch_site not in ["same-origin", "same-site", "none"]:
             abort(403, description="Cross-origin requests forbidden.")
+        return
+
+    # 2. Fallback check for clients lacking Sec-Fetch-Site
+    # Check Origin first, then fall back to Referer
+    source_url = request.headers.get("Origin") or request.headers.get("Referer")
+
+    # Reject missing origins or sandboxed/opaque origins ("null")
+    if not source_url or source_url == "null":
+        abort(403, description="Missing or untrusted request origin.")
+
+    parsed = urlsplit(source_url)
+    source_origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    current_origin = request.host_url.rstrip("/")
+
+    if source_origin != current_origin and source_origin not in ALLOWED_ORIGINS:
+        abort(403, description="Cross-origin request rejected.")
 
 
 @app.before_request

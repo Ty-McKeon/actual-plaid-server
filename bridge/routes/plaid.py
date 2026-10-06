@@ -1,8 +1,7 @@
-from services import PlaidService
-from middleware import require_json
 from flask import Blueprint, g, jsonify, request
-from models import UserPlaidConfigs
-from models import db, PlaidItems, UserPlaidConfigs
+from middleware import require_json
+from models import PlaidItems, UserPlaidConfigs, db
+from services import PlaidService
 
 plaid_bp = Blueprint("plaid", __name__)
 
@@ -18,7 +17,7 @@ def get_plaid_service_for_user(user_id: str = None) -> PlaidService:
     return PlaidService.from_config(config)
 
 
-@plaid_bp.post("/api/plaid/create-link-token")
+@plaid_bp.post("/create-link-token")
 def create_link_token():
     plaid_service = get_plaid_service_for_user()
     link_token = plaid_service.create_link_token()
@@ -26,7 +25,7 @@ def create_link_token():
     return jsonify({"link_token": link_token}), 200
 
 
-@plaid_bp.post("/api/plaid/exchange-public-token")
+@plaid_bp.post("/exchange-public-token")
 @require_json
 def exchange_public_token():
     data = request.get_json()

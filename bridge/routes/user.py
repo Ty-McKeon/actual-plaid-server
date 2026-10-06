@@ -1,14 +1,13 @@
-import middleware.auth as auth
 import plaid
-from services import PlaidService
-from flask import Blueprint, request, jsonify, g
-from models import db, UserPlaidConfigs
+from flask import Blueprint, g, jsonify, request
 from middleware import require_json
+from models import UserPlaidConfigs, db
+from services import PlaidService
 
 user_bp = Blueprint("user", __name__)
 
 
-@user_bp.put("/api/user/plaid-config")
+@user_bp.put("/plaid-config")
 @require_json
 def upsert_user_config():
     data = request.get_json()

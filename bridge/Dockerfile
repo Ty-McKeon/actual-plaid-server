@@ -16,6 +16,10 @@ ARG USER_GID=1000
 RUN groupadd -g ${USER_GID} appgroup && \
     useradd -u ${USER_UID} -g appgroup -s /bin/bash -m appuser
 
+# Set up python virutal environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 # Install app dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -26,7 +30,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # ------------------------------------------------------------------------------
 FROM base AS development
 
+# Set to non root user
 USER appuser
+
+# Set python to venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 CMD ["/bin/sh", "-c", "while sleep 1000; do :; done"]
 
@@ -47,6 +55,9 @@ COPY --chown=appuser:appgroup . .
 USER appuser
 
 EXPOSE 8080
+
+# Set python to venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Run app using gunicorn
 CMD ["gunicorn", \

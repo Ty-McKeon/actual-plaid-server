@@ -20,6 +20,9 @@
 	"forwardPorts": [
 		8080
 	],
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {}
+  	},
 	// Uncomment the next line if you want start specific services in your Docker Compose config.
 	// "runServices": [],
 	// Uncomment the next line if you want to keep your containers running after VS Code shuts down.
@@ -34,13 +37,14 @@
 				"python.analysis.extraPaths": [
 					"/workspace/bridge"
 				],
+        		"python.defaultInterpreterPath": "/opt/venv/bin/python",
 				"emmet.includeLanguages": {
 					"jinja": "html",
 					"jinja-html": "html"
 				},
 				"editor.formatOnSave": true,
 				"[python]": {
-					"editor.defaultFormatter": "ms-python.black-formatter"
+					"editor.defaultFormatter": "charliermarsh.ruff"
 				},
 				"[javascript]": {
 					"editor.defaultFormatter": "esbenp.prettier-vscode"
@@ -53,12 +57,12 @@
 				}
 			},
 			"extensions": [
-				"ms-python.black-formatter",
 				"ms-python.python",
 				"ms-python.debugpy",
 				"samuelcolvin.jinjahtml",
 				"ms-azuretools.vscode-containers",
-				"esbenp.prettier-vscode"
+				"esbenp.prettier-vscode",
+				"charliermarsh.ruff"
 			]
 		}
 	},
