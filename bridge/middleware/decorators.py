@@ -1,5 +1,6 @@
 from functools import wraps
-from flask import request, jsonify
+
+from flask import abort, jsonify, request
 
 
 def require_json(func):
@@ -11,7 +12,10 @@ def require_json(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         # Allow HTMX requests from the dashboard UI to send form-encoded data
-        if request.headers.get("HX-Request"):
+        if (
+            request.headers.get("HX-Request") == "true"
+            and request.mimetype == "application/x-www-form-urlencoded"
+        ):
             return func(*args, **kwargs)
 
         # 1. Check Content-Type header
@@ -44,3 +48,11 @@ def require_json(func):
         return func(*args, **kwargs)
 
     return wrapper
+
+
+def validate_string_fields(data, fields):
+    """Reject structured JSON values before string operations or upstream calls."""
+    for field, max_length in fields.items():
+        value = data.get(field)
+        if value is not None and (not isinstance(value, str) or len(value) > max_length):
+            abort(400, description=f"{field} must be a string of at most {max_length} characters.")

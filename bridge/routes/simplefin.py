@@ -16,8 +16,10 @@ Protocol Workflow:
    - Actual Budget sends an HTTP POST request to `<BASE_URL>/simplefin/claim/<claim_id>`
      (with empty body / Content-Length: 0).
    - The bridge verifies `claim_id`, ensures `is_claimed` is False, and marks it as claimed.
+   - Setup tokens left unclaimed for longer than `SETUP_TOKEN_TTL` are rejected.
    - The bridge generates Basic Auth credentials and responds with an "Access URL" as plain text (HTTP 200):
      `https://<username>:<password>@<host>/simplefin`
+   - Only a hash of the password is stored, so the Access URL cannot be recovered later.
 
 3. Accounts & Transactions Sync (`GET /simplefin/accounts`):
    - Actual Budget sends periodic GET requests to the Access URL using HTTP Basic Auth.
@@ -34,17 +36,25 @@ Protocol Workflow:
 import base64
 import logging
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import plaid
 from flask import Blueprint, Response, abort, g, jsonify, render_template, request
-from models import PlaidItems, SimpleFinCredentials, UserPlaidConfigs, db
+from middleware import require_cloudflare_auth
+from models import (
+    PlaidItems,
+    SimpleFinCredentials,
+    UserPlaidConfigs,
+    db,
+    hash_simplefin_password,
+)
 from services import (
     PlaidService,
     build_access_url,
     build_claim_url,
     build_simplefin_response,
     map_plaid_account_to_simplefin,
+    plaid_error_message,
 )
 
 # Blueprint definition: Registered in app.py with url_prefix="/simplefin"
@@ -56,19 +66,34 @@ logger = logging.getLogger(__name__)
 def _verify_basic_auth() -> SimpleFinCredentials | None:
     """Extracts and verifies HTTP Basic Auth credentials from the request."""
     auth = request.authorization
-    if not auth or not auth.username or not auth.password:
+    if not auth or auth.type.lower() != "basic" or not auth.username or not auth.password:
         return None
 
     credentials = SimpleFinCredentials.query.filter_by(username=auth.username).first()
     if not credentials or not credentials.is_claimed:
         return None
 
-    if not credentials.password or not secrets.compare_digest(
-        credentials.password, auth.password
-    ):
+    if not credentials.check_password(auth.password):
         return None
 
     return credentials
+
+
+def _credentials_for_user(user_id: str) -> list[SimpleFinCredentials]:
+    """Returns the user's SimpleFIN credentials, newest first."""
+    return (
+        SimpleFinCredentials.query.filter_by(user_id=user_id)
+        .order_by(SimpleFinCredentials.created_at.desc())
+        .all()
+    )
+
+
+def _epoch_to_date(epoch: int) -> date:
+    """Converts a client-supplied Unix timestamp to a UTC date, rejecting absurd values."""
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).date()
+    except (OverflowError, OSError, ValueError):
+        abort(400, description="Invalid start-date or end-date timestamp.")
 
 
 # ============================================================================
@@ -77,14 +102,10 @@ def _verify_basic_auth() -> SimpleFinCredentials | None:
 
 
 @simplefin_bp.get("/tokens")
+@require_cloudflare_auth
 def get_tokens():
     """List SimpleFIN credentials/tokens for the user or render partial."""
-    user_id = g.user_id
-    all_credentials = (
-        SimpleFinCredentials.query.filter_by(user_id=user_id)
-        .order_by(SimpleFinCredentials.created_at.desc())
-        .all()
-    )
+    all_credentials = _credentials_for_user(g.user_id)
     if request.headers.get("HX-Request"):
         return render_template(
             "partials/simplefin-sync.html.jinja",
@@ -98,6 +119,7 @@ def get_tokens():
                     "id": c.id,
                     "claim_id": c.claim_id,
                     "is_claimed": c.is_claimed,
+                    "is_expired": c.is_expired,
                     "created_at": c.created_at.isoformat() if c.created_at else None,
                 }
                 for c in all_credentials
@@ -108,6 +130,7 @@ def get_tokens():
 
 
 @simplefin_bp.post("/token")
+@require_cloudflare_auth
 def create_setup_token():
     """Generates a new SimpleFIN Setup Token for the authenticated user.
 
@@ -117,6 +140,9 @@ def create_setup_token():
     user_id = g.user_id
 
     claim_id = secrets.token_hex(16)
+
+    # Clear out setup tokens that were generated but never used
+    SimpleFinCredentials.purge_expired()
 
     credentials = SimpleFinCredentials(
         user_id=user_id,
@@ -131,22 +157,37 @@ def create_setup_token():
     setup_token = base64.b64encode(claim_url.encode("utf-8")).decode("utf-8")
 
     if request.headers.get("HX-Request"):
-        all_credentials = (
-            SimpleFinCredentials.query.filter_by(user_id=user_id)
-            .order_by(SimpleFinCredentials.created_at.desc())
-            .all()
-        )
         return (
             render_template(
                 "partials/simplefin-sync.html.jinja",
                 setup_token=setup_token,
-                credentials=all_credentials,
+                credentials=_credentials_for_user(user_id),
                 success="New SimpleFIN setup token generated! Copy it below to connect Actual Budget.",
             ),
             201,
         )
 
     return jsonify({"setup_token": setup_token, "claim_url": claim_url}), 201
+
+
+@simplefin_bp.delete("/tokens/<int:credential_id>")
+@require_cloudflare_auth
+def revoke_token(credential_id: int):
+    """Revokes a setup token or claimed Access URL so it can no longer be used."""
+    credentials = SimpleFinCredentials.query.filter_by(
+        id=credential_id, user_id=g.user_id
+    ).first_or_404(description="SimpleFIN credential not found.")
+    db.session.delete(credentials)
+    db.session.commit()
+
+    if request.headers.get("HX-Request"):
+        return render_template(
+            "partials/simplefin-sync.html.jinja",
+            credentials=_credentials_for_user(g.user_id),
+            success="SimpleFIN credential revoked.",
+        )
+
+    return jsonify({"status": "revoked", "id": credential_id}), 200
 
 
 @simplefin_bp.post("/claim/<claim_id>")
@@ -164,15 +205,26 @@ def claim_token(claim_id: str):
     if credentials.is_claimed:
         abort(403, description="Claim token has already been claimed.")
 
-    credentials.is_claimed = True
+    if credentials.is_expired:
+        abort(403, description="Setup token has expired. Generate a new one.")
 
     username = secrets.token_hex(16)
     password = secrets.token_hex(32)
 
-    credentials.username = username
-    credentials.password = password
-
+    # Conditional update so two concurrent claims cannot both succeed
+    claimed = SimpleFinCredentials.query.filter_by(
+        id=credentials.id, is_claimed=False
+    ).update(
+        {
+            "is_claimed": True,
+            "username": username,
+            "password": hash_simplefin_password(password),
+        }
+    )
     db.session.commit()
+
+    if not claimed:
+        abort(403, description="Claim token has already been claimed.")
 
     access_url = build_access_url(username, password)
 
@@ -205,22 +257,40 @@ def get_accounts():
         )
 
     # Parse query parameters
-    start_date_epoch = request.args.get("start-date", type=int)
-    end_date_epoch = request.args.get("end-date", type=int)
+    def parse_epoch(name):
+        value = request.args.get(name)
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            abort(400, description=f"{name} must be an integer Unix timestamp.")
+
+    start_date_epoch = parse_epoch("start-date")
+    end_date_epoch = parse_epoch("end-date")
+    if (start_date_epoch is not None and end_date_epoch is not None
+            and start_date_epoch > end_date_epoch):
+        abort(400, description="start-date must not be after end-date.")
     pending = request.args.get("pending") in ("1", "true", "True")
     balances_only = request.args.get("balances-only") in ("1", "true", "True")
 
     # Determine date range for Plaid transactions
-    if end_date_epoch:
-        end_date = datetime.fromtimestamp(end_date_epoch, tz=timezone.utc).date()
+    if end_date_epoch is not None:
+        end_date = _epoch_to_date(end_date_epoch)
     else:
         end_date = datetime.now(tz=timezone.utc).date()
 
-    if start_date_epoch:
-        start_date = datetime.fromtimestamp(start_date_epoch, tz=timezone.utc).date()
+    if start_date_epoch is not None:
+        start_date = _epoch_to_date(start_date_epoch)
     else:
         # Default to a 30-day window if start-date is omitted
-        start_date = end_date - timedelta(days=30)
+        try:
+            start_date = end_date - timedelta(days=30)
+        except OverflowError:
+            abort(400, description="end-date is too early for the default date range.")
+
+    if start_date > end_date:
+        abort(400, description="start-date must not be after end-date.")
 
     user_id = credential.user_id
 
@@ -269,7 +339,7 @@ def get_accounts():
                 except plaid.ApiException as tx_err:
                     errors.append(
                         f"Transactions error for institution {item.institution_name or item.item_id}: "
-                        f"{tx_err.body or str(tx_err)}"
+                        f"{plaid_error_message(tx_err)}"
                     )
 
             # Group transactions by account_id
@@ -294,7 +364,7 @@ def get_accounts():
         except plaid.ApiException as item_err:
             errors.append(
                 f"Plaid error for institution {item.institution_name or item.item_id}: "
-                f"{item_err.body or str(item_err)}"
+                f"{plaid_error_message(item_err)}"
             )
         except Exception:
             logger.exception(

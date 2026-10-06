@@ -1,9 +1,11 @@
+import json
 from datetime import date
 
 import plaid
 from plaid.api import plaid_api
-from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
+from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.country_code import CountryCode
+from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.item_public_token_exchange_request import (
     ItemPublicTokenExchangeRequest,
 )
@@ -18,6 +20,18 @@ ENV_MAP = {
     "sandbox": plaid.Environment.Sandbox,
     "production": plaid.Environment.Production,
 }
+
+# Maximum page size accepted by /transactions/get
+TRANSACTIONS_PAGE_SIZE = 500
+
+
+def plaid_error_message(err: plaid.ApiException) -> str:
+    """Extracts the human-readable message from a Plaid API error response."""
+    try:
+        body = json.loads(err.body)
+        return body.get("error_message") or body.get("error_code") or str(err.reason)
+    except (TypeError, ValueError, AttributeError):
+        return str(err.reason or "Plaid API request failed.")
 
 
 class PlaidService:
@@ -72,10 +86,19 @@ class PlaidService:
         response = self.client.item_public_token_exchange(request)
         return response["access_token"], response["item_id"]
 
+    def remove_item(self, access_token: str) -> None:
+        """Removes the Item at Plaid, invalidating its access token and ending billing."""
+        self.client.item_remove(ItemRemoveRequest(access_token=access_token))
+
     def get_accounts(self, access_token: str) -> list[dict]:
-        """Fetch all accounts and current balances for a given access token."""
-        request = AccountsBalanceGetRequest(access_token=access_token)
-        response = self.client.accounts_balance_get(request)
+        """Fetch all accounts and their balances for a given access token.
+
+        Uses /accounts/get (balances as of Plaid's last update of the Item) rather than
+        /accounts/balance/get, which is billed per call and forces a slow real-time
+        fetch from the institution on every sync.
+        """
+        request = AccountsGetRequest(access_token=access_token)
+        response = self.client.accounts_get(request)
         return [acct.to_dict() for acct in response["accounts"]]
 
     def get_transactions(
@@ -86,7 +109,7 @@ class PlaidService:
         account_ids: list[str] | None = None,
     ) -> list[dict]:
         """Fetch transactions between start_date and end_date."""
-        options = TransactionsGetRequestOptions()
+        options = TransactionsGetRequestOptions(count=TRANSACTIONS_PAGE_SIZE)
         if account_ids:
             options.account_ids = account_ids
 

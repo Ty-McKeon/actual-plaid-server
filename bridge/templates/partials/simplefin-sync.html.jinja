@@ -26,7 +26,7 @@
 <div class="simplefin-content">
     <div class="simplefin-actions">
         <p class="section-explanation">
-            Generate a single-use SimpleFIN Setup Token to configure bank sync in Actual Budget.
+            Generate a single-use SimpleFIN Setup Token to configure bank sync in Actual Budget. Tokens expire if not used within 24 hours.
         </p>
         <button
             type="button"
@@ -98,6 +98,7 @@
                             <th>Claim ID</th>
                             <th>Status</th>
                             <th>Created</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -109,6 +110,10 @@
                                         <span class="badge badge-success badge-sm">
                                             <span class="badge-dot badge-dot-active"></span> Claimed / Active
                                         </span>
+                                    {% elif cred.is_expired %}
+                                        <span class="badge badge-neutral badge-sm">
+                                            <span class="badge-dot"></span> Expired
+                                        </span>
                                     {% else %}
                                         <span class="badge badge-warning badge-sm">
                                             <span class="badge-dot"></span> Pending Claim
@@ -117,6 +122,18 @@
                                 </td>
                                 <td class="text-muted text-sm">
                                     {{ cred.created_at.strftime('%Y-%m-%d %H:%M') if cred.created_at else '—' }}
+                                </td>
+                                <td>
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-danger btn-xs"
+                                        hx-delete="{{ url_for('simplefin.revoke_token', credential_id=cred.id) }}"
+                                        hx-target="#simplefin-sync-container"
+                                        hx-swap="innerHTML"
+                                        hx-confirm="Revoke this credential? Any Actual Budget instance using it will stop syncing."
+                                    >
+                                        Revoke
+                                    </button>
                                 </td>
                             </tr>
                         {% endfor %}

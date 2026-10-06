@@ -1,13 +1,15 @@
 import plaid
-from flask import Blueprint, g, jsonify, render_template, request
-from middleware import require_json
-from models import UserPlaidConfigs, db
+from flask import Blueprint, abort, g, jsonify, render_template, request
+from middleware import require_cloudflare_auth, require_json
+from middleware.decorators import validate_string_fields
+from models import PlaidItems, UserPlaidConfigs, db
 from services import PlaidService
 
 user_bp = Blueprint("user", __name__)
 
 
 @user_bp.get("/plaid-config")
+@require_cloudflare_auth
 def get_user_config():
     """Retrieve user Plaid config or render the setup-form partial."""
     config = UserPlaidConfigs.query.filter_by(user_id=g.user_id).first()
@@ -27,6 +29,7 @@ def get_user_config():
 
 
 @user_bp.put("/plaid-config")
+@require_cloudflare_auth
 @require_json
 def upsert_user_config():
     """Save and verify Plaid API credentials for the user."""
@@ -35,12 +38,15 @@ def upsert_user_config():
     else:
         data = request.form
 
+    validate_string_fields(data, {
+        "clientID": 128, "client_id": 128, "secret": 512, "env": 32, "plaid_env": 32,
+    })
     client_id = (data.get("clientID") or data.get("client_id") or "").strip()
     secret = (data.get("secret") or "").strip()
     env = (data.get("env") or data.get("plaid_env") or "sandbox").strip().lower()
 
     if env not in ("sandbox", "production"):
-        env = "sandbox"
+        abort(400, description="env must be sandbox or production.")
 
     if not client_id or not secret:
         err = "Missing Plaid Client ID or Secret."
@@ -59,6 +65,29 @@ def upsert_user_config():
 
     email = g.email
     user_id = g.user_id
+
+    # Access tokens are bound to the client ID and environment that created them, so
+    # switching either would leave every linked institution unusable (and impossible
+    # to remove at Plaid). Rotating only the secret is fine.
+    existing = UserPlaidConfigs.query.filter_by(user_id=user_id).first()
+    if existing and (existing.plaid_client_id != client_id or existing.plaid_env != env):
+        linked = PlaidItems.query.filter_by(user_id=user_id).count()
+        if linked:
+            err = (
+                f"{linked} linked institution(s) belong to the current Plaid client ID "
+                "and environment. Disconnect them before switching to a different one."
+            )
+            if request.headers.get("HX-Request"):
+                return (
+                    render_template(
+                        "partials/setup-form.html.jinja",
+                        config=existing,
+                        error=err,
+                        edit=True,
+                    ),
+                    409,
+                )
+            return jsonify({"error": err}), 409
 
     try:
         plaid_service = PlaidService(user_id, client_id, secret, env)

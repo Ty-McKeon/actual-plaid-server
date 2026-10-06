@@ -34,6 +34,9 @@ services:
     environment:
       - DATABASE_URI=sqlite:////data/bridge.db
       - BASE_URL=${BASE_URL:-http://flask_bridge:8080}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - CLOUDFLARE_TEAM_DOMAIN=${CLOUDFLARE_TEAM_DOMAIN:-}
+      - CLOUDFLARE_AUD=${CLOUDFLARE_AUD:-}
 
 networks:
   budget_net:

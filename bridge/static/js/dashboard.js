@@ -76,8 +76,9 @@ function fallbackCopy(input, callback) {
     try {
         const successful = document.execCommand("copy");
         if (successful && callback) callback();
+        if (!successful) showToast("Failed to copy token. Please copy manually.", "danger");
     } catch (err) {
-        showToast("Failed to copy token. Please copy manually.", "error");
+        showToast("Failed to copy token. Please copy manually.", "danger");
     }
 }
 
@@ -85,15 +86,10 @@ function fallbackCopy(input, callback) {
 // Plaid Link Workflow
 // ============================================================================
 
-let plaidLoaded = false;
-
-loadPlaid()
-    .then(() => {
-        plaidLoaded = true;
-    })
-    .catch((err) => {
-        console.warn("Could not load Plaid SDK:", err);
-    });
+// Preload the SDK so the first click on "Link Bank Account" is instant
+loadPlaid().catch((err) => {
+    console.warn("Could not load Plaid SDK:", err);
+});
 
 async function sendPublicToken(public_token, metadata) {
     const res = await fetch("/api/plaid/exchange-public-token", {
@@ -110,7 +106,7 @@ async function sendPublicToken(public_token, metadata) {
 
     if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "Failed to exchange public token");
+        throw new Error(errData.message || errData.error || "Failed to exchange public token");
     }
 
     return res;
@@ -141,17 +137,14 @@ document.addEventListener("click", async (e) => {
 
     e.preventDefault();
 
-    if (!plaidLoaded && !window.Plaid) {
-        try {
-            await loadPlaid();
-            plaidLoaded = true;
-        } catch (err) {
-            showToast("Failed to load Plaid Link SDK. Please check your network connection.", "danger");
-            return;
-        }
-    }
-
     setLinkButtonLoading(true);
+    try {
+        await loadPlaid();
+    } catch (err) {
+        showToast("Failed to load Plaid Link SDK. Please check your network connection.", "danger");
+        setLinkButtonLoading(false);
+        return;
+    }
 
     try {
         const res = await fetch("/api/plaid/create-link-token", {
@@ -160,7 +153,10 @@ document.addEventListener("click", async (e) => {
 
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            showToast(err.error || "Could not initialize Plaid session. Ensure credentials are configured.", "danger");
+            showToast(
+                err.message || err.error || "Could not initialize Plaid session. Ensure credentials are configured.",
+                "danger",
+            );
             setLinkButtonLoading(false);
             return;
         }
@@ -210,11 +206,22 @@ document.addEventListener("click", async (e) => {
 // HTMX Global Event Listeners
 // ============================================================================
 
+// HTMX discards 4xx responses by default, which would hide the validation errors the
+// server renders into the form partials. Swap those in instead of treating them as failures.
+document.addEventListener("htmx:beforeSwap", (e) => {
+    const xhr = e.detail.xhr;
+    const isHtml = (xhr.getResponseHeader("Content-Type") || "").includes("text/html");
+    if ([400, 409].includes(xhr.status) && isHtml) {
+        e.detail.shouldSwap = true;
+        e.detail.isError = false;
+    }
+});
+
 document.addEventListener("htmx:afterSwap", (e) => {
     // If the setup form was updated and succeeded, refresh the link account box if needed
     if (e.detail.target.id === "setup-form-container") {
         const linkBtn = document.getElementById("link-btn");
-        const isConfigured = document.querySelector(".badge-success") !== null;
+        const isConfigured = e.detail.target.querySelector(".badge-success") !== null;
         if (linkBtn && isConfigured) {
             linkBtn.disabled = false;
         }
@@ -225,7 +232,7 @@ document.addEventListener("htmx:responseError", (e) => {
     const errorText = e.detail.xhr?.responseText;
     try {
         const parsed = JSON.parse(errorText);
-        showToast(parsed.error || parsed.message || "Request failed.", "danger");
+        showToast(parsed.message || parsed.error || "Request failed.", "danger");
     } catch {
         // Fallback for non-JSON errors
         if (e.detail.xhr?.status >= 400 && e.detail.xhr?.status !== 422) {

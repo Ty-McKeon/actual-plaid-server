@@ -2,8 +2,10 @@
 
 import base64
 import binascii
+import hashlib
 import os
-from datetime import datetime, timezone
+import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -17,14 +19,19 @@ db = SQLAlchemy()
 def _format_fernet_key(key: bytes) -> bytes:
     """Ensure the key is 32 url-safe base64-encoded bytes."""
     try:
-        decoded = base64.urlsafe_b64decode(key)
-        if len(decoded) == 32:
+        if len(base64.urlsafe_b64decode(key)) == 32:
             return key
     except (binascii.Error, ValueError):
-        # If the provided key is already 32 raw bytes, base64-encode it
-        if len(key) == 32:
-            return base64.urlsafe_b64encode(key)
-    return key
+        pass
+
+    # If the provided key is already 32 raw bytes, base64-encode it
+    if len(key) == 32:
+        return base64.urlsafe_b64encode(key)
+
+    raise RuntimeError(
+        "ENCRYPTION_KEY must be a Fernet key (32 url-safe base64-encoded bytes) "
+        "or exactly 32 raw bytes."
+    )
 
 
 def load_master_key() -> bytes:
@@ -107,7 +114,7 @@ class UserPlaidConfigs(db.Model):
     # Plaid environment to target: 'sandbox', 'development', or 'production'
     plaid_env = db.Column(db.String(32), default="sandbox")
 
-    def to_dict(self, mask_secret: bool = True) -> dict:
+    def to_dict(self) -> dict:
         """Serializes the record to a dictionary safe for API responses."""
         return {
             "user_id": self.user_id,
@@ -154,6 +161,22 @@ class PlaidItems(db.Model):
     access_token = db.Column(EncryptedString(512), nullable=False)
 
 
+# How long a setup token may sit unclaimed before it stops being accepted
+SETUP_TOKEN_TTL = timedelta(hours=24)
+
+# Marks a stored SimpleFIN password as hashed (older rows were stored in plaintext)
+SIMPLEFIN_HASH_PREFIX = "sha256$"
+
+
+def hash_simplefin_password(password: str) -> str:
+    """Hashes a SimpleFIN access password for storage.
+
+    Passwords are 256-bit random tokens rather than user-chosen secrets, so a
+    fast unsalted digest is sufficient to keep them unrecoverable from the DB.
+    """
+    return SIMPLEFIN_HASH_PREFIX + hashlib.sha256(password.encode()).hexdigest()
+
+
 class SimpleFinCredentials(db.Model):
     """
     User configuration and credentials for the SimpleFIN API.
@@ -170,8 +193,54 @@ class SimpleFinCredentials(db.Model):
     # 3. Lookup tokens (indexed & unique for fast resolution)
     claim_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
     username = db.Column(db.String(64), unique=True, nullable=True, index=True)
-    password = db.Column(db.String(64), nullable=True)
+    # Hash of the access password (see `hash_simplefin_password`), never the plaintext
+    password = db.Column(db.String(128), nullable=True)
 
     # 4. Lifecycle state
     is_claimed = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    @staticmethod
+    def _setup_token_cutoff() -> datetime:
+        """Creation time before which an unclaimed setup token has expired (naive UTC)."""
+        return datetime.now(timezone.utc).replace(tzinfo=None) - SETUP_TOKEN_TTL
+
+    @property
+    def is_expired(self) -> bool:
+        """Whether this is a setup token that went unclaimed past its lifetime."""
+        if self.is_claimed:
+            return False
+        if self.created_at is None:
+            return True
+        created_at = self.created_at
+        if created_at.tzinfo is not None:
+            created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
+        return created_at < self._setup_token_cutoff()
+
+    @classmethod
+    def purge_expired(cls) -> None:
+        """Deletes expired unclaimed setup tokens. The caller commits."""
+        cls.query.filter(
+            cls.is_claimed.is_(False),
+            db.or_(cls.created_at.is_(None), cls.created_at < cls._setup_token_cutoff()),
+        ).delete(synchronize_session=False)
+
+    def check_password(self, password: str) -> bool:
+        """Constant-time comparison of a presented password against the stored hash."""
+        if not self.password:
+            return False
+        return secrets.compare_digest(
+            self.password.encode(), hash_simplefin_password(password).encode()
+        )
+
+
+def hash_legacy_simplefin_passwords() -> None:
+    """Hashes any SimpleFIN passwords written in plaintext by older versions."""
+    legacy = SimpleFinCredentials.query.filter(
+        SimpleFinCredentials.password.isnot(None),
+        SimpleFinCredentials.password.notlike(f"{SIMPLEFIN_HASH_PREFIX}%"),
+    ).all()
+    for credentials in legacy:
+        credentials.password = hash_simplefin_password(credentials.password)
+    if legacy:
+        db.session.commit()

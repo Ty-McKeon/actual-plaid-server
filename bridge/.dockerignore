@@ -11,3 +11,8 @@ venv/
 *.db
 *.sqlite3
 data/
+.env
+.env.*
+secrets/
+*.pem
+*.key

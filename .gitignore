@@ -26,4 +26,7 @@ secrets/
 Thumbs.db
 .vscode/*
 !.vscode/launch.json
+
+# AI Tools
 agent.md
+AUDIT_REPORT.md

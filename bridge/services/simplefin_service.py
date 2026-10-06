@@ -6,6 +6,7 @@ responses into the SimpleFIN Data Format (SDF).
 
 import os
 from datetime import date, datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -59,6 +60,12 @@ def build_access_url(username: str, password: str) -> str:
     return urlunsplit((parts.scheme, netloc, path, parts.query, parts.fragment))
 
 
+def _format_money(value: Decimal) -> str:
+    """Formats a decimal with exactly two decimal places, never as negative zero."""
+    quantized = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{quantized or Decimal(0):.2f}"
+
+
 def format_amount(amount: float | str) -> str:
     """Inverts Plaid transaction amount for SimpleFIN Data Format (SDF).
 
@@ -66,19 +73,22 @@ def format_amount(amount: float | str) -> str:
     SimpleFIN and Actual Budget require expenses as negative numbers ("-12.50").
     Format: String with exactly two decimal places.
     """
-    amt = float(amount)
-    return f"{-amt:.2f}"
+    return _format_money(-Decimal(str(amount)))
 
 
-def format_balance(balance: float | str, account_type: str | None = None) -> str:
+def format_balance(
+    balance: float | str | None, account_type: str | None = None
+) -> str:
     """Formats account balance with 2 decimal places.
 
-    For credit cards and loans, ensure balances represent debt as negative numbers.
+    Plaid reports the amount owed on credit cards and loans as a positive number, so
+    those are inverted to represent debt as negative. An overpaid card (negative at
+    Plaid) correctly comes out as a positive balance.
     """
-    bal = float(balance)
+    bal = Decimal(str(balance if balance is not None else 0))
     if account_type and account_type.lower() in ("credit", "loan"):
-        bal = -abs(bal)
-    return f"{bal:.2f}"
+        bal = -bal
+    return _format_money(bal)
 
 
 def to_epoch(val: Any) -> int:
@@ -86,15 +96,19 @@ def to_epoch(val: Any) -> int:
     if isinstance(val, (int, float)):
         return int(val)
     if isinstance(val, datetime):
-        return int(val.replace(tzinfo=timezone.utc).timestamp())
+        if val.tzinfo is None:
+            val = val.replace(tzinfo=timezone.utc)
+        return int(val.timestamp())
     if isinstance(val, date):
         return int(
             datetime(val.year, val.month, val.day, tzinfo=timezone.utc).timestamp()
         )
     if isinstance(val, str):
         try:
-            dt = datetime.fromisoformat(val[:10])
-            return int(dt.replace(tzinfo=timezone.utc).timestamp())
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
         except (ValueError, TypeError):
             pass
     return int(datetime.now(timezone.utc).timestamp())
@@ -110,11 +124,14 @@ def map_plaid_transaction_to_simplefin(tx: dict) -> dict:
         "posted": to_epoch(posted_date),
         "amount": format_amount(tx.get("amount", 0.0)),
         "description": tx.get("name") or tx.get("original_description") or "",
+        # Actual requires payeeName even when Plaid supplies no merchant name.
+        "payee": (
+            tx.get("merchant_name") or tx.get("name")
+            or tx.get("original_description") or "Unknown payee"
+        ),
         "transacted_at": to_epoch(authorized_date),
         "pending": bool(tx.get("pending", False)),
     }
-    if tx.get("merchant_name"):
-        mapped["payee"] = tx.get("merchant_name")
     return mapped
 
 
@@ -126,7 +143,7 @@ def map_plaid_account_to_simplefin(
 ) -> dict:
     """Transforms a Plaid account dictionary and its transactions into SimpleFIN format."""
     balances = account.get("balances", {})
-    current_balance = balances.get("current", 0.0)
+    current_balance = balances.get("current")
     available_balance = balances.get("available")
     acct_type = str(account.get("type", "")).lower()
 
@@ -153,7 +170,8 @@ def map_plaid_account_to_simplefin(
         },
     }
     if available_balance is not None:
-        mapped["available-balance"] = format_balance(available_balance, acct_type)
+        # Available credit is remaining spending capacity, not outstanding debt.
+        mapped["available-balance"] = format_balance(available_balance)
 
     return mapped
 
