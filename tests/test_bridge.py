@@ -229,7 +229,7 @@ class BridgeTests(unittest.TestCase):
                 os.environ,
                 {"CLOUDFLARE_TEAM_DOMAIN": "team", "CLOUDFLARE_AUD": "application"},
             ),
-            patch("middleware.auth.get_jwks_client") as jwks,
+            patch("middleware.auth.get_jwks_client"),
             patch("middleware.auth.jwt.decode", wraps=jwt.decode) as decode,
         ):
             # Use a supported algorithm only inside the test to exercise claim enforcement.
