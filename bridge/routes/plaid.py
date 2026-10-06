@@ -6,7 +6,7 @@ from services import PlaidService
 plaid_bp = Blueprint("plaid", __name__)
 
 
-def get_plaid_service_for_user(user_id: str = None) -> PlaidService:
+def get_plaid_service_for_user(user_id: str | None = None) -> PlaidService:
     """Retrieves credentials from the DB and returns an initialized PlaidService."""
     if user_id == None:
         user_id = g.user_id

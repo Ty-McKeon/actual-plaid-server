@@ -1,10 +1,16 @@
+from datetime import date
 import plaid
 from plaid.api import plaid_api
-from plaid.model.link_token_create_request import LinkTokenCreateRequest
+from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.country_code import CountryCode
+from plaid.model.item_public_token_exchange_request import (
+    ItemPublicTokenExchangeRequest,
+)
+from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.products import Products
-from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.transactions_get_request import TransactionsGetRequest
+from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
 
 # Map user string config to official Plaid SDK environment endpoints
 ENV_MAP = {
@@ -64,3 +70,48 @@ class PlaidService:
         request = ItemPublicTokenExchangeRequest(public_token=public_token)
         response = self.client.item_public_token_exchange(request)
         return response["access_token"], response["item_id"]
+
+    def get_accounts(self, access_token: str) -> list[dict]:
+        """Fetch all accounts and current balances for a given access token."""
+        request = AccountsBalanceGetRequest(access_token=access_token)
+        response = self.client.accounts_balance_get(request)
+        return [acct.to_dict() for acct in response["accounts"]]
+
+    def get_transactions(
+        self,
+        access_token: str,
+        start_date: date,
+        end_date: date,
+        account_ids: list[str] | None = None,
+    ) -> list[dict]:
+        """Fetch transactions between start_date and end_date."""
+        options = TransactionsGetRequestOptions()
+        if account_ids:
+            options.account_ids = account_ids
+
+        request = TransactionsGetRequest(
+            access_token=access_token,
+            start_date=start_date,
+            end_date=end_date,
+            options=options,
+        )
+        response = self.client.transactions_get(request)
+        raw_txs = [tx.to_dict() for tx in response["transactions"]]
+        total_transactions = response.get("total_transactions", len(raw_txs))
+
+        # Paginate if there are more transactions
+        while len(raw_txs) < total_transactions:
+            options.offset = len(raw_txs)
+            request = TransactionsGetRequest(
+                access_token=access_token,
+                start_date=start_date,
+                end_date=end_date,
+                options=options,
+            )
+            resp = self.client.transactions_get(request)
+            page_txs = [tx.to_dict() for tx in resp["transactions"]]
+            if not page_txs:
+                break
+            raw_txs.extend(page_txs)
+
+        return raw_txs

@@ -1,6 +1,7 @@
 """Database models and encryption utilities for Plaid configuration and items."""
 
 import base64
+import binascii
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +20,7 @@ def _format_fernet_key(key: bytes) -> bytes:
         decoded = base64.urlsafe_b64decode(key)
         if len(decoded) == 32:
             return key
-    except Exception:
+    except (binascii.Error, ValueError):
         # If the provided key is already 32 raw bytes, base64-encode it
         if len(key) == 32:
             return base64.urlsafe_b64encode(key)
@@ -168,8 +169,8 @@ class SimpleFinCredentials(db.Model):
 
     # 3. Lookup tokens (indexed & unique for fast resolution)
     claim_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
-    username = db.Column(db.String(64), unique=True, nullable=False, index=True)
-    password = db.Column(db.String(64), nullable=False)
+    username = db.Column(db.String(64), unique=True, nullable=True, index=True)
+    password = db.Column(db.String(64), nullable=True)
 
     # 4. Lifecycle state
     is_claimed = db.Column(db.Boolean, default=False, nullable=False)

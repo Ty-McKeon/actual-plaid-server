@@ -35,3 +35,7 @@ services:
   # attempt to connect with invalid/missing tunnel tokens locally
   cloudflared:
     profiles: ["production-only"]
+
+  actual_server:
+    ports:
+      - "5006:5006"

@@ -1,9 +1,9 @@
 import os
+from urllib.parse import urlsplit
 
 from flask import Flask, abort, g, render_template, request
 from models import db
-from routes import plaid_bp, user_bp
-from urllib.parse import urlsplit
+from routes import plaid_bp, simplefin_bp, user_bp
 
 
 def create_app():
@@ -11,6 +11,7 @@ def create_app():
 
     app.register_blueprint(user_bp, url_prefix="/api/user")
     app.register_blueprint(plaid_bp, url_prefix="/api/plaid")
+    app.register_blueprint(simplefin_bp, url_prefix="/simplefin")
 
     # Fallback to the mounted /data folder inside the container
     default_db_url = "sqlite:////data/bridge.db"
@@ -51,6 +52,10 @@ ALLOWED_ORIGINS = {
 def check_csrf_origins():
     # Only protect state-changing requests
     if request.method not in ["POST", "PUT", "DELETE", "PATCH"]:
+        return
+
+    # Skip CSRF check for machine-to-machine protocol endpoints (SimpleFIN)
+    if request.path.startswith("/simplefin"):
         return
 
     fetch_site = request.headers.get("Sec-Fetch-Site")

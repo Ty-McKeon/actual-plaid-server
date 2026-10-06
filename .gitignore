@@ -26,3 +26,4 @@ secrets/
 Thumbs.db
 .vscode/*
 !.vscode/launch.json
+agent.md

@@ -10,14 +10,14 @@ services:
       budget_net:
         ipv4_address: 172.28.0.50
     
-  # actual_server:
-  #   image: actualbudget/actual-server:latest
-  #   container_name: actual_server
-  #   restart: unless-stopped
-  #   volumes:
-  #     - ./actual-data:/data
-  #   networks:
-  #     - budget_net
+  actual_server:
+    image: actualbudget/actual-server:latest
+    container_name: actual_server
+    restart: unless-stopped
+    volumes:
+      - ./actual-data:/data
+    networks:
+      - budget_net
 
   flask_bridge:
     build: ./bridge
