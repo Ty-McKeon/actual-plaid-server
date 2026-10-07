@@ -1,0 +1,11 @@
+{# Health of one linked institution, loaded into its card on the dashboard #}
+{% if state == 'active' %}
+    <span class="badge-dot badge-dot-active"></span> {{ label }}
+{% elif state == 'unknown' %}
+    <span class="badge-dot badge-dot-muted"></span> <span class="text-muted">{{ label }}</span>
+{% else %}
+    <span class="badge badge-{{ 'warning' if state == 'expiring' else 'danger' }} badge-xs">{{ label }}</span>
+{% endif %}
+{% if detail %}
+    <span class="text-muted text-xs">{{ detail }}</span>
+{% endif %}
