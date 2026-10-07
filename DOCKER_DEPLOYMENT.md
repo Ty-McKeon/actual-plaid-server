@@ -1,8 +1,23 @@
 # Docker isolation and rollout
 
-The deployment now uses a fixed-operation Docker gateway and a separate bridge
-network per Actual user. These changes are prepared in the repository; applying
-them to the running deployment requires a rebuild and controlled restart.
+Every Actual user has a container on a separate bridge network. Those containers
+are created in one of two ways, selected by `COMPOSE_PROFILES` in `.env`:
+
+* **Provisioner off (default).** `scripts/actual-users.py` writes
+  `compose.override.yaml`, which defines each user's container and network.
+  Docker Compose creates them and they run permanently. The `provisioner` and
+  `docker_gateway` services do not start, so no container holds the Docker socket.
+* **Provisioner on (`COMPOSE_PROFILES=provisioner`).** A fixed-operation Docker
+  gateway creates each container and network on demand and removes them when idle.
+
+The two must not be mixed: run `scripts/actual-users.py sync` after changing the
+setting, which removes or regenerates `compose.override.yaml` to match. Sections
+that mention the relay, the gateway or `<project>_actual_net_<user>` describe the
+provisioner; with it off the per-user networks are named
+`<project>_actual_static_<user>` and have the same members.
+
+Changes to either mode require a rebuild and controlled restart of the running
+deployment.
 
 ## Network and privilege boundaries
 
@@ -56,8 +71,19 @@ bind match this deployment. Foreign names, mounts, networks, or endpoints cause
 a failure rather than being adopted or modified. Current managed containers with
 old image/resource settings are also recreated with their existing data bind.
 
-Unmanaged hand-created Actual containers are now refused by this routing path;
-move them to the managed lifecycle explicitly before relying on this proxy.
+With the provisioner on, containers it did not create are refused, including the
+ones `compose.override.yaml` defines when it is off. Remove them before switching
+(`scripts/actual-users.py sync`, then `docker compose up -d --remove-orphans`).
+
+Switching the provisioner off needs its services stopped explicitly, because
+removing the profile from `.env` leaves running services untouched:
+
+```bash
+docker compose --profile provisioner rm -sf docker_gateway provisioner
+```
+
+Stopping the gateway removes the containers and networks it created. User data is
+kept either way.
 
 ## Image pins and updates
 
@@ -80,7 +106,8 @@ docker buildx imagetools inspect actualbudget/actual-server:<selected-version> \
 
 Actual's reference appears in Compose, the gateway's `DEFAULT_IMAGE`, the local
 development Compose file, the environment example, and the Docker integration
-test. Caddy is referenced by Compose and the integration test. Python is in both
+test. `compose.override.yaml` copies it from Compose, so run
+`scripts/actual-users.py sync` after changing it. Caddy is referenced by Compose and the integration test. Python is in both
 Dockerfiles. Cloudflared is in Compose. Update these together, review upstream
 release notes, scan the new images, and repeat the checks below before rollout.
 Digest pinning prevents silent tag changes; it does not establish that an image
@@ -113,11 +140,13 @@ It does not call Plaid or prove the production Cloudflare policy is configured.
 During a maintenance window, deploy from this repository:
 
 ```bash
-docker compose build flask_bridge provisioner docker_gateway
-docker compose up -d
+docker compose build
+docker compose up -d --remove-orphans
 docker compose ps
-docker compose logs --tail=100 docker_gateway provisioner flask_bridge
+docker compose logs --tail=100 flask_bridge
 ```
+
+With the provisioner on, also check `docker compose logs --tail=100 docker_gateway provisioner`.
 
 Stopping the old provisioner removes its disposable managed containers while
 retaining their data. The new gateway recreates them on demand. Running `up -d`

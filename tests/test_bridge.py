@@ -523,10 +523,13 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual(response.status_code, expected, (path, token))
 
     def test_self_service_gives_unlisted_users_a_generated_container(self):
+        environ = {"ACTUAL_SELF_SERVICE": "true", "COMPOSE_PROFILES": "provisioner"}
         with (
             self.actual_users({"bob@example.com": "bob"}),
-            patch.dict(os.environ, {"ACTUAL_SELF_SERVICE": "true"}),
+            patch.dict(os.environ, environ),
+            patch.object(routing_service.requests, "post") as post,
         ):
+            post.return_value = Mock(status_code=200, ok=True)
             first = self.client.get("/auth/route").headers["X-Actual-Upstream"]
             again = self.client.get("/auth/route").headers["X-Actual-Upstream"]
             with patch.dict(os.environ, {"DEV_USER_EMAIL": "USER@example.com"}):
@@ -541,6 +544,40 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(first, same_person["X-Actual-Upstream"])
         self.assertEqual(listed, "actual_bob")
         self.assertNotEqual(first, other)
+
+    def test_provisioner_is_off_unless_its_profile_is_enabled(self):
+        routing_service._last_ensured.clear()
+        with (
+            self.actual_users({"user@example.com": "alice"}),
+            patch.object(routing_service.requests, "post") as post,
+        ):
+            post.return_value = Mock(status_code=200, ok=True)
+
+            # Off by default: the container is expected to be running already
+            for profiles in ("", "production-only", "provisioners"):
+                with patch.dict(os.environ, {"COMPOSE_PROFILES": profiles}):
+                    response = self.client.get("/auth/route")
+                    self.assertEqual(
+                        response.headers["X-Actual-Upstream"], "actual_alice"
+                    )
+            post.assert_not_called()
+
+            with patch.dict(os.environ, {"COMPOSE_PROFILES": "other, provisioner"}):
+                self.assertEqual(self.client.get("/auth/route").status_code, 204)
+            self.assertEqual(
+                post.call_args.args[0],
+                "http://provisioner:8090/containers/alice/ensure",
+            )
+
+    def test_self_service_needs_the_provisioner(self):
+        # Without the provisioner nothing could create a container for the user
+        with (
+            self.actual_users({"bob@example.com": "bob"}),
+            patch.dict(os.environ, {"ACTUAL_SELF_SERVICE": "true"}),
+        ):
+            response = self.client.get("/auth/route")
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("X-Actual-Upstream", response.headers)
 
     def test_route_starts_the_container_through_the_provisioner(self):
         routing_service._last_ensured.clear()

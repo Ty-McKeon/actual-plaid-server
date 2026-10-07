@@ -23,9 +23,9 @@ exposed on the host and no ports need forwarding.
                       │         │
                       │       Caddy ── asks the bridge "whose request is this?"
                       │         │
-                 Flask bridge   └── actual_<user>   one container per user,
-                      │                              started on demand
-                 provisioner ── docker_gateway ── Docker
+                 Flask bridge   └── actual_<user>   one container per user
+                      ┆
+                 provisioner ── docker_gateway ── Docker     (optional)
 ```
 
 | Service | Role |
@@ -33,13 +33,20 @@ exposed on the host and no ports need forwarding.
 | `cloudflared` | Connects the stack to Cloudflare. The only way in. |
 | `flask_bridge` | Dashboard for linking banks, the SimpleFIN endpoints Actual syncs from, and the check that maps a signed-in user to their Actual container. |
 | `caddy` | Serves the single Actual hostname and proxies each request to the signed-in user's own container. |
-| `provisioner` | Unprivileged relay between the bridge and the gateway. |
-| `docker_gateway` | The only service with Docker access. Creates each user's Actual container from a fixed template, and removes it when idle. |
 | `actual_<user>` | One Actual Budget server per user, on its own private network. |
+| `provisioner` | Optional. Unprivileged relay between the bridge and the gateway. |
+| `docker_gateway` | Optional. The only service with Docker access. Creates each user's Actual container from a fixed template, and removes it when idle. |
 
-A user's Actual container is created on their first visit, removed after a period
-without requests, and recreated on their next visit. Their data stays on disk in
-`actual-data/users/<name>` throughout.
+Each user's data lives on disk in `actual-data/users/<name>`. There are two ways
+their container comes to exist:
+
+- **Provisioner off (default).** You add each user with a script, which defines
+  their container in the Compose configuration. Containers run permanently and
+  nothing in the stack has access to Docker.
+- **Provisioner on.** A user's container is created on their first visit, removed
+  after a period without requests, and recreated on their next visit. This saves
+  memory and allows self-service, at the cost of running one service with access
+  to the Docker socket. See [The provisioner](#the-provisioner).
 
 See [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md) for the network layout, the
 isolation between users, and the rollout procedure.
@@ -92,9 +99,10 @@ Optional settings, with their defaults, are described in `.env.example`:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ACTUAL_SELF_SERVICE` | `true` | Give anyone Access lets in a container on their first visit. |
-| `ACTUAL_IDLE_MINUTES` | `30` | Remove a user's container after this long without requests. |
-| `ACTUAL_MAX_CONTAINERS` | `10` | Most Actual containers running at once. |
+| `COMPOSE_PROFILES` | unset | Set to `provisioner` to create containers on demand. |
+| `ACTUAL_SELF_SERVICE` | `true` | Provisioner only. Give anyone Access lets in a container on their first visit. |
+| `ACTUAL_IDLE_MINUTES` | `30` | Provisioner only. Remove a user's container after this long without requests. |
+| `ACTUAL_MAX_CONTAINERS` | `10` | Provisioner only. Most Actual containers running at once. |
 | `ACTUAL_MEMORY_LIMIT_MB` | `512` | Memory limit per Actual container. |
 | `ACTUAL_CPU_LIMIT` | `1` | CPU limit per Actual container. |
 | `ACTUAL_PIDS_LIMIT` | `256` | Process limit per Actual container. |
@@ -102,14 +110,16 @@ Optional settings, with their defaults, are described in `.env.example`:
 
 ### 3. Start
 
+Add at least one user (see [Managing users](#managing-users)), then:
+
 ```bash
 docker compose up -d --build
-docker compose logs --tail=50 docker_gateway flask_bridge
+docker compose logs --tail=50 flask_bridge
 ```
 
-The gateway logs a warning at startup if the host does not enforce one of the
-container limits. On older Raspberry Pi OS releases the memory cgroup has to be
-enabled in the kernel boot settings first.
+Container limits are only enforced if the host's kernel supports them. On older
+Raspberry Pi OS releases the memory cgroup has to be enabled in the kernel boot
+settings first.
 
 ## Using it
 
@@ -129,25 +139,87 @@ from anything else running on the host.
 
 ## Managing users
 
-With self-service on, nobody needs adding: a user's container is named after a
-hash of their verified email, such as `actual_u-5ff860bf1190596c`.
+Install the user-management script's dependency in a virtual environment once:
 
-To give someone a readable name, let several email addresses share one
-container, or allow specific people in when self-service is off, assign them a
-name:
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r scripts/requirements.txt
+source .venv/bin/activate
+```
+
+Activate that environment when managing users. Users are added by name:
 
 ```bash
 scripts/actual-users.py add alice alice@example.com
 scripts/actual-users.py list
-scripts/actual-users.py remove alice
+docker compose up -d --remove-orphans
 ```
 
-Assignments are stored in `config/actual-users.json` and take effect
-immediately. Assign a name before the user's first visit; changing it later
-means renaming their folder in `actual-data/users/`. Removing a user keeps their
-data.
+The script records the assignment in `config/actual-users.json`, which the bridge
+reads to route requests, and writes `compose.override.yaml`, which defines a
+container and a private network for each user. Docker Compose picks that file up
+automatically, so the last command starts the new user's container or removes a
+deleted one. It also restarts Caddy and the bridge to attach them to the user's
+network, which interrupts everyone for a few seconds.
 
-The email must also be allowed by the Access policy for the Actual hostname.
+Several email addresses can share one container by giving them the same name.
+Removing a user keeps their data in `actual-data/users/<name>`. The email must
+also be allowed by the Access policy for the Actual hostname.
+
+To remove an assignment and its running container:
+
+```bash
+scripts/actual-users.py remove alice
+docker compose up -d --remove-orphans
+```
+
+This removes access to Actual through the proxy. Remove the email from the
+Cloudflare Access policies and revoke their SimpleFIN credentials too when
+offboarding someone from the whole service.
+
+## The provisioner
+
+The provisioner creates each user's container on demand instead. It is off by
+default because it needs one service, `docker_gateway`, to hold the Docker
+socket, and access to Docker is equivalent to root on the host. The gateway is
+kept on an internal network, accepts only a user name, and builds every container
+from a fixed template; see [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md).
+
+Turn it on if memory is tight or you want self-service:
+
+```bash
+echo "COMPOSE_PROFILES=provisioner" >> .env
+scripts/actual-users.py sync
+docker compose up -d --build --remove-orphans
+```
+
+With it on:
+
+- A container is created on a user's first visit and removed after
+  `ACTUAL_IDLE_MINUTES` without requests. The first request after that takes a
+  couple of seconds.
+- With `ACTUAL_SELF_SERVICE=true`, anyone the Access policy lets in gets a
+  container without being added first, named after a hash of their verified
+  email, such as `actual_u-5ff860bf1190596c`. Set it to `false` to serve only the
+  users added with the script.
+- `scripts/actual-users.py` only assigns names, and its changes take effect
+  immediately. Assign a name before a user's first visit; changing it later means
+  renaming their folder in `actual-data/users/`.
+- The gateway logs a warning at startup if the host does not enforce one of the
+  container limits.
+
+To turn it off again, stop its services before removing the setting. Deleting the
+line from `.env` alone leaves them running:
+
+```bash
+docker compose --profile provisioner rm -sf docker_gateway provisioner
+# remove COMPOSE_PROFILES=provisioner from .env, then:
+scripts/actual-users.py sync
+docker compose up -d --remove-orphans
+```
+
+Self-service users are not carried over: add each one by name with the script,
+using their existing folder name in `actual-data/users/` to keep their data.
 
 ## Data and backups
 
@@ -158,11 +230,24 @@ The email must also be allowed by the Access policy for the Actual hostname.
 | `config/actual-users.json` | Name assignments. |
 | `.env` | The tunnel token and the encryption key. |
 
-Back up all four. To copy the bridge database out of its volume:
+Back up all four. The bridge uses SQLite WAL mode, so copying only its live
+`bridge.db` file can miss recent writes. Create a consistent snapshot with
+SQLite's online backup API, then copy that snapshot out of the volume:
 
 ```bash
-docker cp flask_bridge:/data/bridge.db ./bridge-backup.db
+docker exec flask_bridge python -c '
+import sqlite3
+with sqlite3.connect("file:/data/bridge.db?mode=ro", uri=True) as source:
+    with sqlite3.connect("/data/bridge-backup.db") as target:
+        source.backup(target)
+        assert target.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+'
+docker cp flask_bridge:/data/bridge-backup.db ./bridge-backup.db
 ```
+
+Run one backup at a time and protect the exported file. For the Actual data
+directories, stop the user containers during copying or use a consistent storage
+snapshot. Verify restoration before relying on the backups.
 
 Do not run `docker compose down --volumes` on a deployment you care about; it
 deletes the bridge database.
@@ -178,8 +263,9 @@ git pull
 docker compose up -d --build
 ```
 
-Restarting the gateway removes the running Actual containers. They are recreated
-on each user's next request, with their data intact.
+With the optional provisioner enabled, restarting the gateway removes the running
+Actual containers. They are recreated on each user's next request, with their
+data intact.
 
 ## Development
 
@@ -214,9 +300,9 @@ Code is formatted and linted with [Ruff](https://docs.astral.sh/ruff/).
   audience of the specific Access application.
 - Each Actual container runs on its own network with memory, CPU and process
   limits, and cannot reach another user's container.
-- Only `docker_gateway` can reach Docker, and it accepts a user name and nothing
-  else. Docker access is equivalent to root on the host, so keep the host itself
-  restricted.
+- By default no service has access to Docker. With the provisioner enabled, only
+  `docker_gateway` does, and it accepts a user name and nothing else. Docker
+  access is equivalent to root on the host, so keep the host itself restricted.
 - Access logs redact SimpleFIN claim IDs and leave out query strings.
 
 Budget files and the bridge's user metadata are not encrypted by this project.

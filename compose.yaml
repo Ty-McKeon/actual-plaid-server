@@ -10,10 +10,14 @@ services:
       budget_net:
         ipv4_address: 172.28.0.50
     
-  # Each user gets their own Actual Budget container (`actual_<name>`), started on
-  # demand by the provisioner. Point the tunnel's Actual hostname at
-  # http://caddy:80; Caddy asks the bridge who the request belongs to and proxies
-  # it to that user's container.
+  # Each user gets their own Actual Budget container (`actual_<name>`). Point the
+  # tunnel's Actual hostname at http://caddy:80; Caddy asks the bridge who the
+  # request belongs to and proxies it to that user's container.
+  #
+  # By default those containers are defined in compose.override.yaml, which
+  # scripts/actual-users.py generates, and nothing here has access to Docker.
+  # Setting COMPOSE_PROFILES=provisioner in .env starts the provisioner instead,
+  # which creates them on demand.
   caddy:
     image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     container_name: caddy
@@ -46,11 +50,15 @@ services:
       - CLOUDFLARE_TEAM_DOMAIN=${CLOUDFLARE_TEAM_DOMAIN:-}
       - CLOUDFLARE_AUD=${CLOUDFLARE_AUD:-}
       - CLOUDFLARE_ACTUAL_AUD=${CLOUDFLARE_ACTUAL_AUD:-}
-      - ACTUAL_PROVISIONER_URL=http://provisioner:8090
+      # Tells the bridge whether the provisioner profile is switched on
+      - COMPOSE_PROFILES=${COMPOSE_PROFILES:-}
+      - ACTUAL_PROVISIONER_URL=${ACTUAL_PROVISIONER_URL:-}
       - ACTUAL_SELF_SERVICE=${ACTUAL_SELF_SERVICE:-true}
 
   # Unprivileged fixed-operation relay; no Docker socket or tenant data access.
+  # Only started with COMPOSE_PROFILES=provisioner.
   provisioner:
+    profiles: ["provisioner"]
     build:
       context: ./provisioner
       target: relay
@@ -72,7 +80,9 @@ services:
 
   # The only socket holder. Accepts tenant names, never Docker API requests or
   # caller-supplied container/network configurations. Policy comes from this file.
+  # Only started with COMPOSE_PROFILES=provisioner.
   docker_gateway:
+    profiles: ["provisioner"]
     build:
       context: ./provisioner
       target: gateway

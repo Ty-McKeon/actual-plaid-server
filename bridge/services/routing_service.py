@@ -25,6 +25,10 @@ import requests
 logger = logging.getLogger(__name__)
 
 DEFAULT_USERS_FILE = "/config/actual-users.json"
+
+# The Compose profile that starts the provisioner, and where it then listens
+PROVISIONER_PROFILE = "provisioner"
+DEFAULT_PROVISIONER_URL = "http://provisioner:8090"
 CONTAINER_PREFIX = "actual_"
 
 # Names become part of a hostname the proxy connects to, so keep them strict
@@ -78,9 +82,29 @@ def _load_users() -> dict[str, str]:
     return users
 
 
+def provisioner_url() -> str:
+    """Returns the provisioner's address, or an empty string when it is not in use.
+
+    The provisioner only runs when the Compose profile of the same name is switched
+    on. Without it, each user's container is defined in the Compose configuration
+    and is always running, so there is nothing to start on demand.
+    """
+    explicit = os.getenv("ACTUAL_PROVISIONER_URL", "").rstrip("/")
+    if explicit:
+        return explicit
+
+    profiles = {p.strip() for p in os.getenv("COMPOSE_PROFILES", "").split(",")}
+    return DEFAULT_PROVISIONER_URL if PROVISIONER_PROFILE in profiles else ""
+
+
 def self_service_enabled() -> bool:
-    """Whether verified users without an assigned name get a container anyway."""
-    return os.getenv("ACTUAL_SELF_SERVICE", "").lower() in ("1", "true", "yes")
+    """Whether verified users without an assigned name get a container anyway.
+
+    Only the provisioner can create a container for someone who was not set up in
+    advance, so self-service is off whenever the provisioner is.
+    """
+    requested = os.getenv("ACTUAL_SELF_SERVICE", "").lower() in ("1", "true", "yes")
+    return requested and bool(provisioner_url())
 
 
 def resolve_actual_name(email: str | None) -> str | None:
@@ -101,7 +125,7 @@ def resolve_actual_name(email: str | None) -> str | None:
 
 def _ensure_running(name: str) -> None:
     """Asks the provisioner to create and start the container if there is one."""
-    base_url = os.getenv("ACTUAL_PROVISIONER_URL", "").rstrip("/")
+    base_url = provisioner_url()
     if not base_url:
         return
 

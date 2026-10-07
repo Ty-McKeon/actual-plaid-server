@@ -13,7 +13,8 @@ venv/
 bridge-data/
 actual-data/
 
-# Per-user Actual Budget assignments written by scripts/actual-users.py
+# Per-user Actual Budget assignments and containers written by scripts/actual-users.py
+compose.override.yaml
 config/*
 !config/.gitkeep
 
