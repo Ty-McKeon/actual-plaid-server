@@ -371,13 +371,9 @@ document.addEventListener("htmx:beforeSwap", (e) => {
 });
 
 document.addEventListener("htmx:afterSwap", (e) => {
-    // If the setup form was updated and succeeded, refresh the link account box if needed
-    if (e.detail.target.id === "setup-form-container") {
-        const linkBtn = document.getElementById("link-btn");
-        const isConfigured = e.detail.target.querySelector(".badge-success") !== null;
-        if (linkBtn && isConfigured) {
-            linkBtn.disabled = false;
-        }
+    // Credential saves also replace the linking panel through an out-of-band swap.
+    if (["setup-form-container", "link-account-container"].includes(e.detail.target.id)) {
+        showPendingControls();
     }
 });
 

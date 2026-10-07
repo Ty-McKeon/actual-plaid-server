@@ -1,3 +1,4 @@
+{% from 'macros/icons.html.jinja' import icon %}
 <!DOCTYPE html>
 <html lang="en">
 
@@ -16,10 +17,7 @@
             <div class="header-container">
                 <div class="brand">
                     <div class="brand-icon-wrap">
-                        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="12" y1="1" x2="12" y2="23"></line>
-                            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-                        </svg>
+                        {{ icon('wallet', 'brand-icon') }}
                     </div>
                     <div class="brand-text">
                         <h1 class="brand-title">Actual Budget Plaid Bridge</h1>
@@ -29,10 +27,7 @@
 
                 <div class="header-meta">
                     <div class="user-pill" title="Authenticated User">
-                        <svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                            <circle cx="12" cy="7" r="4"></circle>
-                        </svg>
+                        {{ icon('user', 'icon icon-xs') }}
                         <span>{{ g.email or 'user@example.com' }}</span>
                     </div>
                 </div>

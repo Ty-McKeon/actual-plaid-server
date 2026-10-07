@@ -825,6 +825,16 @@ body {
    Icons & SVGs
    ========================================================================== */
 
+.icon,
+.brand-icon,
+.alert-icon,
+.notice-icon,
+.empty-icon {
+    display: inline-block;
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+
 .icon {
     width: 18px;
     height: 18px;

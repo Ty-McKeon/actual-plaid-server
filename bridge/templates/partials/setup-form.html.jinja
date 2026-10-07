@@ -1,11 +1,9 @@
+{% from 'macros/icons.html.jinja' import icon %}
 {# Plaid API Configuration Component #}
 <div class="card-header">
     <div class="card-title-group">
         <h2 class="card-title">
-            <svg class="icon icon-title" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-            </svg>
+            {{ icon('lock', 'icon icon-title') }}
             Plaid API Credentials
         </h2>
         <p class="card-subtitle">Manage your Plaid developer keys and sync environment</p>
@@ -23,20 +21,14 @@
 
 {% if success %}
     <div class="alert alert-success" role="alert">
-        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
+        {{ icon('check', 'alert-icon') }}
         <span>{{ success }}</span>
     </div>
 {% endif %}
 
 {% if error %}
     <div class="alert alert-danger" role="alert">
-        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="12"></line>
-            <line x1="12" y1="16" x2="12.01" y2="16"></line>
-        </svg>
+        {{ icon('info', 'alert-icon') }}
         <span>{{ error }}</span>
     </div>
 {% endif %}
@@ -75,10 +67,7 @@
                 hx-target="#setup-form-container"
                 hx-swap="innerHTML"
             >
-                <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                </svg>
+                {{ icon('edit', 'icon icon-sm') }}
                 Edit Credentials
             </button>
         </div>

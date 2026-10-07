@@ -139,7 +139,7 @@ def upsert_user_config():
     if request.headers.get("HX-Request"):
         return (
             render_template(
-                "partials/setup-form.html.jinja",
+                "partials/credentials-saved.html.jinja",
                 config=config,
                 success="Credentials verified and saved successfully!",
                 edit=False,

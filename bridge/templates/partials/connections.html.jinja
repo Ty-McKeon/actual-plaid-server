@@ -1,11 +1,9 @@
+{% from 'macros/icons.html.jinja' import icon %}
 {# Linked Financial Institutions Component #}
 <div class="card-header">
     <div class="card-title-group">
         <h2 class="card-title">
-            <svg class="icon icon-title" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
-                <line x1="1" y1="10" x2="23" y2="10"></line>
-            </svg>
+            {{ icon('card', 'icon icon-title') }}
             Connected Institutions
         </h2>
         <p class="card-subtitle">Financial institutions currently synced through this bridge</p>
@@ -23,11 +21,7 @@
             hx-indicator="#connections-spinner"
             title="Refresh connections"
         >
-            <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="23 4 23 10 17 10"></polyline>
-                <polyline points="1 20 1 14 7 14"></polyline>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-            </svg>
+            {{ icon('refresh', 'icon icon-sm') }}
         </button>
         <span id="connections-spinner" class="htmx-indicator spinner"></span>
     </div>
@@ -35,9 +29,7 @@
 
 {% if success %}
     <div class="alert alert-success" role="alert">
-        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
+        {{ icon('check', 'alert-icon') }}
         <span>{{ success }}</span>
     </div>
 {% endif %}
@@ -48,13 +40,7 @@
             <div class="connection-card" id="connection-item-{{ item.id }}">
                 <div class="connection-card-body">
                     <div class="institution-avatar">
-                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M3 21h18"></path>
-                            <path d="M3 10h18"></path>
-                            <path d="M5 6l7-3 7 3"></path>
-                            <path d="M4 10v11"></path>
-                            <path d="M20 10v11"></path>
-                        </svg>
+                        {{ icon('bank', 'icon') }}
                     </div>
                     <div class="institution-info">
                         <h3 class="institution-name">{{ item.institution_name or item.institution_id or 'Financial Institution' }}</h3>
@@ -85,10 +71,7 @@
                         data-institution-name="{{ item.institution_name or 'this institution' }}"
                         title="Sign in to this institution again without relinking its accounts"
                     >
-                        <svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="23 4 23 10 17 10"></polyline>
-                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                        </svg>
+                        {{ icon('refresh', 'icon icon-xs') }}
                         Reconnect
                     </button>
                     <button
@@ -99,10 +82,7 @@
                         hx-swap="innerHTML"
                         hx-confirm="Are you sure you want to disconnect {{ item.institution_name or 'this institution' }}?"
                     >
-                        <svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6"></polyline>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
+                        {{ icon('trash', 'icon icon-xs') }}
                         Disconnect
                     </button>
                     </div>
@@ -113,10 +93,7 @@
 {% else %}
     <div class="empty-state">
         <div class="empty-icon-wrap">
-            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
-                <line x1="1" y1="10" x2="23" y2="10"></line>
-            </svg>
+            {{ icon('card', 'empty-icon') }}
         </div>
         <h3 class="empty-title">No Institutions Connected</h3>
         <p class="empty-subtitle">Connect your bank account using Plaid Link above to start syncing balances and transactions to Actual Budget.</p>
