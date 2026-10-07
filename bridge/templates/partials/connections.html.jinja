@@ -68,9 +68,29 @@
                 </div>
 
                 <div class="connection-card-footer">
-                    <span class="status-indicator-badge">
-                        <span class="badge-dot badge-dot-active"></span> Active
+                    {# Asked of Plaid separately so a slow answer never delays the page #}
+                    <span
+                        class="status-indicator-badge"
+                        hx-get="{{ url_for('plaid.item_status', item_id=item.id) }}"
+                        hx-trigger="load"
+                        hx-swap="innerHTML"
+                    >
+                        <span class="badge-dot badge-dot-muted"></span> <span class="text-muted">Checking…</span>
                     </span>
+                    <div class="connection-card-actions">
+                    <button
+                        type="button"
+                        class="btn btn-secondary btn-xs"
+                        data-reconnect-item="{{ item.id }}"
+                        data-institution-name="{{ item.institution_name or 'this institution' }}"
+                        title="Sign in to this institution again without relinking its accounts"
+                    >
+                        <svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                        </svg>
+                        Reconnect
+                    </button>
                     <button
                         type="button"
                         class="btn btn-outline-danger btn-xs"
@@ -85,6 +105,7 @@
                         </svg>
                         Disconnect
                     </button>
+                    </div>
                 </div>
             </div>
         {% endfor %}

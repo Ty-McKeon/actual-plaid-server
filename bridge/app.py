@@ -13,6 +13,11 @@ from models import (
     hash_legacy_simplefin_passwords,
 )
 from routes import plaid_bp, routing_bp, simplefin_bp, user_bp
+from services.plaid_service import (
+    OAUTH_RETURN_PATH,
+    oauth_redirect_uri,
+    transaction_history_days,
+)
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from werkzeug.exceptions import HTTPException
@@ -40,6 +45,10 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 def create_app():
     app = Flask(__name__)
+
+    # Refuse to start with a setting that would only fail later, when a user links
+    oauth_redirect_uri()
+    transaction_history_days()
 
     # Flask only autoescapes templates ending in .html and friends, which the
     # `.html.jinja` templates used here do not
@@ -74,6 +83,9 @@ def create_app():
     app.after_request(prevent_sensitive_response_caching)
     app.register_error_handler(HTTPException, handle_http_error)
     app.add_url_rule("/", view_func=dashboard)
+    # Banks send the user back here after their own sign-in page; the dashboard's
+    # script then resumes Plaid Link where it left off
+    app.add_url_rule(OAUTH_RETURN_PATH, endpoint="oauth_return", view_func=dashboard)
     return app
 
 

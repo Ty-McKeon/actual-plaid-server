@@ -91,7 +91,7 @@ loadPlaid().catch((err) => {
     console.warn("Could not load Plaid SDK:", err);
 });
 
-async function sendPublicToken(public_token, metadata) {
+async function sendPublicToken(sessionId, public_token, metadata) {
     const res = await fetch("/api/plaid/exchange-public-token", {
         method: "POST",
         headers: {
@@ -99,6 +99,7 @@ async function sendPublicToken(public_token, metadata) {
         },
         body: JSON.stringify({
             public_token: public_token,
+            session_id: sessionId,
             institution_id: metadata?.institution?.institution_id,
             institution_name: metadata?.institution?.name,
         }),
@@ -130,75 +131,227 @@ function setLinkButtonLoading(isLoading) {
     }
 }
 
-// Use event delegation for #link-btn so dynamically re-rendered elements work
-document.addEventListener("click", async (e) => {
-    const linkBtn = e.target.closest("#link-btn");
-    if (!linkBtn || linkBtn.disabled) return;
+function refreshConnections() {
+    if (window.htmx) {
+        window.htmx.ajax("GET", "/api/plaid/items", {
+            target: "#connections-container",
+            swap: "innerHTML",
+        });
+    }
+}
 
-    e.preventDefault();
+// A single reservation is shared across tabs because OAuth can return in a new
+// tab. Web Locks make creating/changing that reservation atomic across tabs.
+// Only the opaque server session ID is needed to resume; the server checks its owner.
+const OAUTH_RETURN_PATH = "/oauth-return";
+const PENDING_LINK_KEY = "plaidPendingLink";
 
-    setLinkButtonLoading(true);
+function withLinkLock(action) {
+    if (!navigator.locks) {
+        return Promise.reject(new Error("Bank linking is not supported in this browser. Please try another browser."));
+    }
+    return navigator.locks.request("plaid-link-flow", action);
+}
+
+function readPendingLink() {
+    const value = localStorage.getItem(PENDING_LINK_KEY);
+    if (!value) return null;
+    try {
+        const pending = JSON.parse(value);
+        if (/^[a-f0-9]{64}$/.test(pending?.session_id) && Date.parse(pending.expires_at) > Date.now()) {
+            return pending;
+        }
+    } catch (_) {}
+    return null;
+}
+
+function showPendingControls() {
+    const button = document.getElementById("cancel-pending-link");
+    if (button) {
+        try { button.hidden = !readPendingLink(); } catch (_) { button.hidden = true; }
+    }
+}
+
+async function clearPendingLink(sessionId) {
+    await withLinkLock(() => {
+        if (readPendingLink()?.session_id === sessionId) localStorage.removeItem(PENDING_LINK_KEY);
+    });
+    showPendingControls();
+}
+
+async function saveLinkResult(sessionId, publicToken, metadata) {
+    await withLinkLock(() => {
+        const pending = readPendingLink();
+        if (pending?.session_id === sessionId) {
+            localStorage.setItem(PENDING_LINK_KEY, JSON.stringify({ ...pending, publicToken, metadata, finished: true }));
+        }
+    });
+}
+
+async function getLinkSession(sessionId) {
+    const res = await fetch(`/api/plaid/link-sessions/${encodeURIComponent(sessionId)}`);
+    if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.message || "This bank connection cannot be continued by the current user.");
+    }
+    return res.json();
+}
+
+function leaveOAuthReturn() {
+    if (window.location.pathname === OAUTH_RETURN_PATH) window.history.replaceState({}, "", "/");
+}
+
+async function finishLink(pending, session, publicToken, metadata) {
+    if (!session.completed) {
+        if (session.item_id !== null) {
+            const res = await fetch(`/api/plaid/link-sessions/${pending.session_id}/complete`, { method: "POST" });
+            if (!res.ok) throw new Error("Could not confirm the reconnect. Please reload to retry.");
+        } else {
+            await sendPublicToken(pending.session_id, publicToken, metadata);
+        }
+    }
+    await clearPendingLink(pending.session_id);
+    leaveOAuthReturn();
+    refreshConnections();
+    showToast(session.item_id !== null ? "Institution reconnected." : "Institution connected.", "success");
+}
+
+function runPlaidLink(pending, session, { receivedRedirectUri, onDone }) {
+    const handler = window.Plaid.create({
+        token: session.link_token,
+        ...(receivedRedirectUri ? { receivedRedirectUri } : {}),
+        onSuccess: async (publicToken, metadata) => {
+            try {
+                // Retain the callback result if the network fails during exchange.
+                await saveLinkResult(pending.session_id, publicToken, metadata);
+                await finishLink(pending, session, publicToken, metadata);
+            } catch (err) {
+                showToast(err.message || "Could not save the connection. Please reload to retry.", "danger");
+            } finally {
+                handler.destroy();
+                onDone();
+            }
+        },
+        onExit: async (err) => {
+            try {
+                await fetch(`/api/plaid/link-sessions/${pending.session_id}`, { method: "DELETE" });
+                await clearPendingLink(pending.session_id);
+                leaveOAuthReturn();
+            } catch (_) {}
+            handler.destroy();
+            onDone();
+            if (err) showToast(err.display_message || "Bank connection cancelled or failed.", "warning");
+        },
+    });
+    handler.open();
+}
+
+async function openPlaidLink(tokenUrl, { onDone }) {
+    let pending;
     try {
         await loadPlaid();
+        const session = await withLinkLock(async () => {
+            if (readPendingLink()) {
+                throw new Error("A bank connection is already in progress. Finish it, or cancel the pending connection first.");
+            }
+            // Verify storage before creating a Link session that needs it to resume.
+            localStorage.setItem(PENDING_LINK_KEY, "{}");
+            const res = await fetch(tokenUrl, { method: "POST" });
+            if (!res.ok) {
+                const error = await res.json().catch(() => ({}));
+                throw new Error(error.message || error.error || "Could not start bank linking.");
+            }
+            const session = await res.json();
+            pending = { session_id: session.session_id, expires_at: session.expires_at };
+            localStorage.setItem(PENDING_LINK_KEY, JSON.stringify(pending));
+            return session;
+        });
+        showPendingControls();
+        runPlaidLink(pending, session, { onDone });
     } catch (err) {
-        showToast("Failed to load Plaid Link SDK. Please check your network connection.", "danger");
-        setLinkButtonLoading(false);
+        // Keep a created session for recovery or explicit cancellation.
+        showToast(err.message || "Could not start bank linking.", "danger");
+        onDone();
+    }
+}
+
+async function resumePlaidLinkAfterRedirect() {
+    try {
+        if (window.location.pathname !== OAUTH_RETURN_PATH && !readPendingLink()?.finished) {
+            showPendingControls();
+            return;
+        }
+        const pending = await withLinkLock(() => readPendingLink());
+        if (!pending) {
+            if (window.location.pathname === OAUTH_RETURN_PATH) {
+                showToast("Could not continue linking your bank. Please start again.", "warning");
+            }
+            return;
+        }
+        showPendingControls();
+        const returning = window.location.pathname === OAUTH_RETURN_PATH &&
+            new URLSearchParams(window.location.search).has("oauth_state_id");
+        if (!returning && !pending.publicToken && !pending.finished) return;
+        // Check ownership before opening the SDK or exchanging any token.
+        const session = await getLinkSession(pending.session_id);
+        if (pending.publicToken || pending.finished || session.completed) {
+            await finishLink(pending, session, pending.publicToken, pending.metadata);
+            return;
+        }
+        await loadPlaid();
+        runPlaidLink(pending, session, { receivedRedirectUri: window.location.href, onDone: () => {} });
+    } catch (err) {
+        // Preserve both the callback URL and reservation so reload can retry.
+        showToast(err.message || "Could not continue bank linking. Please reload to retry.", "danger");
+    }
+}
+
+resumePlaidLinkAfterRedirect();
+window.addEventListener("storage", showPendingControls);
+
+// Use event delegation so dynamically re-rendered elements work
+document.addEventListener("click", async (e) => {
+    const cancel = e.target.closest("#cancel-pending-link");
+    if (cancel) {
+        e.preventDefault();
+        cancel.disabled = true;
+        try {
+            await withLinkLock(async () => {
+                const pending = readPendingLink();
+                if (!pending) return;
+                const res = await fetch(`/api/plaid/link-sessions/${pending.session_id}`, { method: "DELETE" });
+                if (!res.ok && ![404, 410].includes(res.status)) throw new Error("Could not cancel the pending connection. Please try again.");
+                localStorage.removeItem(PENDING_LINK_KEY);
+                leaveOAuthReturn();
+            });
+            showPendingControls();
+        } catch (err) { showToast(err.message, "danger"); }
+        finally { cancel.disabled = false; }
+        return;
+    }
+    const linkBtn = e.target.closest("#link-btn");
+    if (linkBtn && !linkBtn.disabled) {
+        e.preventDefault();
+        setLinkButtonLoading(true);
+        await openPlaidLink("/api/plaid/create-link-token", {
+            onDone: () => setLinkButtonLoading(false),
+        });
         return;
     }
 
-    try {
-        const res = await fetch("/api/plaid/create-link-token", {
-            method: "POST",
-        });
-
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            showToast(
-                err.message || err.error || "Could not initialize Plaid session. Ensure credentials are configured.",
-                "danger",
-            );
-            setLinkButtonLoading(false);
-            return;
-        }
-
-        const { link_token } = await res.json();
-
-        const handler = window.Plaid.create({
-            token: link_token,
-            onSuccess: async (public_token, metadata) => {
-                try {
-                    await sendPublicToken(public_token, metadata);
-                    const instName = metadata?.institution?.name || "Financial Institution";
-                    showToast(`Successfully connected ${instName}!`, "success");
-
-                    // Trigger HTMX refresh of the connections container
-                    if (window.htmx) {
-                        window.htmx.ajax("GET", "/api/plaid/items", {
-                            target: "#connections-container",
-                            swap: "innerHTML",
-                        });
-                    }
-                } catch (exchangeErr) {
-                    showToast(exchangeErr.message || "Failed to finalize institution connection.", "danger");
-                } finally {
-                    setLinkButtonLoading(false);
-                }
+    // Reconnect signs in to an institution again through Plaid Link's update mode
+    const reconnectBtn = e.target.closest("[data-reconnect-item]");
+    if (reconnectBtn && !reconnectBtn.disabled) {
+        e.preventDefault();
+        reconnectBtn.disabled = true;
+        const itemId = reconnectBtn.dataset.reconnectItem;
+        await openPlaidLink(`/api/plaid/items/${encodeURIComponent(itemId)}/link-token`, {
+            itemId,
+            institutionName: reconnectBtn.dataset.institutionName,
+            onDone: () => {
+                reconnectBtn.disabled = false;
             },
-            onExit: (err, metadata) => {
-                setLinkButtonLoading(false);
-                if (err) {
-                    console.error("Plaid Link Exit Error:", err);
-                    showToast(err.display_message || "Plaid Link connection cancelled or failed.", "warning");
-                }
-            },
-            onEvent: (eventName, metadata) => {},
         });
-
-        handler.open();
-    } catch (err) {
-        console.error("Link error:", err);
-        showToast("An unexpected error occurred while starting Plaid Link.", "danger");
-        setLinkButtonLoading(false);
     }
 });
 

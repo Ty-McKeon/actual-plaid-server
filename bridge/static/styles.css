@@ -313,6 +313,10 @@ body {
     box-shadow: 0 0 6px currentColor;
 }
 
+.badge-dot-muted {
+    background-color: var(--text-muted);
+}
+
 .text-uppercase {
     text-transform: uppercase;
 }
@@ -754,10 +758,17 @@ body {
 
 .connection-card-footer {
     display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
     justify-content: space-between;
     align-items: center;
     border-top: 1px solid var(--border-color);
     padding-top: 0.75rem;
+}
+
+.connection-card-actions {
+    display: flex;
+    gap: 0.5rem;
 }
 
 .status-indicator-badge {

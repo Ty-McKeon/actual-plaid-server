@@ -153,6 +153,33 @@ class PlaidItems(db.Model):
     access_token = db.Column(EncryptedString(512), nullable=False)
 
 
+class PlaidLinkSessions(db.Model):
+    """Short-lived Link continuations owned by the authenticated initiating user."""
+
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.String(128), nullable=False, index=True)
+    link_token = db.Column(EncryptedString(512), nullable=False)
+    client_id = db.Column(db.String(128), nullable=False)
+    environment = db.Column(db.String(32), nullable=False)
+    item_record_id = db.Column(
+        db.Integer, db.ForeignKey("plaid_items.id", ondelete="CASCADE"), nullable=True
+    )
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    exchange_started = db.Column(db.Boolean, nullable=False, default=False)
+    completed = db.Column(db.Boolean, nullable=False, default=False)
+
+
+class PlaidAccountSnapshots(db.Model):
+    """Last observed account data, retaining its original balance timestamp."""
+
+    item_record_id = db.Column(
+        db.Integer,
+        db.ForeignKey("plaid_items.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    accounts = db.Column(EncryptedString, nullable=False)
+
+
 # How long a setup token may sit unclaimed before it stops being accepted
 SETUP_TOKEN_TTL = timedelta(hours=24)
 

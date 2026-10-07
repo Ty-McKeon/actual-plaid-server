@@ -1,16 +1,21 @@
 import json
-from datetime import date
+import logging
+import os
+from datetime import date, datetime
+from urllib.parse import urlsplit
 
 import plaid
 from plaid.api import plaid_api
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.country_code import CountryCode
+from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import (
     ItemPublicTokenExchangeRequest,
 )
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.link_token_transactions import LinkTokenTransactions
 from plaid.model.products import Products
 from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
@@ -25,6 +30,21 @@ ENV_MAP = {
 TRANSACTIONS_PAGE_SIZE = 500
 REQUEST_TIMEOUT = (5, 20)
 
+# Plaid keeps this much transaction history for a newly linked institution. It is
+# fixed when the institution is linked and cannot be raised afterwards.
+MAX_HISTORY_DAYS = 730
+DEFAULT_HISTORY_DAYS = MAX_HISTORY_DAYS
+
+# Where the dashboard resumes Plaid Link after a bank's own sign-in page sends the
+# user back. Registered in app.py; PLAID_REDIRECT_URI must point at it.
+OAUTH_RETURN_PATH = "/oauth-return"
+
+logger = logging.getLogger(__name__)
+
+# The institution rejected the stored login, usually because the user's consent
+# expired or was revoked. Reconnecting through Plaid Link's update mode fixes it.
+LOGIN_REQUIRED = "ITEM_LOGIN_REQUIRED"
+
 
 def plaid_error_message(err: plaid.ApiException) -> str:
     """Extracts the human-readable message from a Plaid API error response."""
@@ -33,6 +53,67 @@ def plaid_error_message(err: plaid.ApiException) -> str:
         return body.get("error_message") or body.get("error_code") or str(err.reason)
     except (TypeError, ValueError, AttributeError):
         return str(err.reason or "Plaid API request failed.")
+
+
+def plaid_error_code(err: plaid.ApiException) -> str | None:
+    """Extracts Plaid's machine-readable error code from an API error response."""
+    try:
+        return json.loads(err.body).get("error_code")
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def transaction_history_days() -> int:
+    """How many days of history to request when an institution is first linked."""
+    raw = os.getenv("PLAID_TRANSACTION_HISTORY_DAYS", "").strip()
+    if not raw:
+        return DEFAULT_HISTORY_DAYS
+
+    try:
+        days = int(raw)
+    except ValueError:
+        days = 0
+    if not 1 <= days <= MAX_HISTORY_DAYS:
+        raise ValueError(
+            f"PLAID_TRANSACTION_HISTORY_DAYS must be between 1 and {MAX_HISTORY_DAYS}."
+        )
+    return days
+
+
+def oauth_redirect_uri() -> str | None:
+    """The address banks send the user back to after their sign-in page, if set.
+
+    Without one, Plaid Link opens the bank's page in a pop-up, which works on a
+    computer but is unreliable on phones. Each user must also add this address to
+    the allowed redirect URIs of their own Plaid account.
+    """
+    uri = os.getenv("PLAID_REDIRECT_URI", "").strip()
+    if not uri:
+        return None
+
+    parts = urlsplit(uri)
+    local = parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1")
+    if (
+        not (parts.scheme == "https" or local)
+        or not parts.hostname
+        or parts.path != OAUTH_RETURN_PATH
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError(
+            "PLAID_REDIRECT_URI must be an https address ending in "
+            f"{OAUTH_RETURN_PATH}, for example https://bridge.example.com"
+            f"{OAUTH_RETURN_PATH}."
+        )
+    return uri
+
+
+def _rejects_redirect_uri(err: plaid.ApiException) -> bool:
+    """Whether Plaid refused a link token because of its redirect address."""
+    return (
+        plaid_error_code(err) == "INVALID_FIELD"
+        and "redirect" in plaid_error_message(err).lower()
+    )
 
 
 class PlaidService:
@@ -57,19 +138,48 @@ class PlaidService:
             env=config.plaid_env,
         )
 
-    def create_link_token(self) -> str:
-        """Generates an ephemeral link_token required to initialize Plaid Link on the frontend."""
+    def create_link_token(self, access_token: str | None = None) -> str:
+        """Generates an ephemeral link_token required to initialize Plaid Link on the frontend.
 
-        request = LinkTokenCreateRequest(
-            client_name="Actual Budget Bridge",
-            language="en",
-            country_codes=[CountryCode("US")],
-            products=[Products("transactions")],
-            user=LinkTokenCreateRequestUser(client_user_id=self.user_id),
-        )
+        With an `access_token`, Link opens in update mode for that existing
+        institution: the user signs in again and the same connection, with the same
+        account IDs, carries on working. Without one, Link adds a new institution.
+        """
+        common = {
+            "client_name": "Actual Budget Bridge",
+            "language": "en",
+            "country_codes": [CountryCode("US")],
+            "user": LinkTokenCreateRequestUser(client_user_id=self.user_id),
+        }
 
+        if access_token:
+            # Update mode takes the existing connection and must not name products
+            common["access_token"] = access_token
+        else:
+            common["products"] = [Products("transactions")]
+            common["transactions"] = LinkTokenTransactions(
+                days_requested=transaction_history_days()
+            )
+
+        redirect_uri = oauth_redirect_uri()
+        if redirect_uri:
+            try:
+                return self._request_link_token(redirect_uri=redirect_uri, **common)
+            except plaid.ApiException as err:
+                if not _rejects_redirect_uri(err):
+                    raise
+                # This user has not allowed the address in their Plaid account yet.
+                # Linking still works through a pop-up, so carry on without it.
+                logger.warning(
+                    "Plaid rejected the redirect URI for user %s; using a pop-up.",
+                    self.user_id,
+                )
+
+        return self._request_link_token(**common)
+
+    def _request_link_token(self, **fields) -> str:
         response = self.client.link_token_create(
-            request, _request_timeout=REQUEST_TIMEOUT
+            LinkTokenCreateRequest(**fields), _request_timeout=REQUEST_TIMEOUT
         )
         return response["link_token"]
 
@@ -97,6 +207,24 @@ class PlaidService:
             ItemRemoveRequest(access_token=access_token),
             _request_timeout=REQUEST_TIMEOUT,
         )
+
+    def get_item_status(self, access_token: str) -> dict:
+        """Reports whether an institution's connection is healthy.
+
+        Returns:
+            A dict with `error_code` (None when healthy) and `consent_expires`, the
+            time the user's consent runs out if the institution sets one.
+        """
+        response = self.client.item_get(
+            ItemGetRequest(access_token=access_token), _request_timeout=REQUEST_TIMEOUT
+        )
+        item = response["item"]
+        error = item.get("error")
+        expires = item.get("consent_expiration_time")
+        return {
+            "error_code": error.get("error_code") if error else None,
+            "consent_expires": expires if isinstance(expires, datetime) else None,
+        }
 
     def get_accounts(self, access_token: str) -> list[dict]:
         """Fetch all accounts and their balances for a given access token.

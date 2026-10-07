@@ -34,6 +34,7 @@ Protocol Workflow:
 """
 
 import base64
+import json
 import logging
 import secrets
 from datetime import date, datetime, timedelta, timezone
@@ -42,6 +43,7 @@ import plaid
 from flask import Blueprint, Response, abort, g, jsonify, render_template, request
 from middleware import require_cloudflare_auth
 from models import (
+    PlaidAccountSnapshots,
     PlaidItems,
     SimpleFinCredentials,
     UserPlaidConfigs,
@@ -49,11 +51,13 @@ from models import (
     hash_simplefin_password,
 )
 from services import (
+    LOGIN_REQUIRED,
     PlaidService,
     build_access_url,
     build_claim_url,
     build_simplefin_response,
     map_plaid_account_to_simplefin,
+    plaid_error_code,
     plaid_error_message,
 )
 
@@ -91,6 +95,19 @@ def _credentials_for_user(user_id: str) -> list[SimpleFinCredentials]:
         .order_by(SimpleFinCredentials.created_at.desc())
         .all()
     )
+
+
+def _sync_error(item: PlaidItems, summary: str, err: plaid.ApiException) -> str:
+    """Describes a failed Plaid request for the SimpleFIN `errors` list."""
+    name = item.institution_name or item.item_id
+    if plaid_error_code(err) == LOGIN_REQUIRED:
+        # Actual Budget marks an account as needing attention when an error starts
+        # with "Connection to <institution> may need attention"
+        return (
+            f"Connection to {name} may need attention: "
+            "reconnect it in the bridge dashboard."
+        )
+    return f"{summary} for institution {name}: {plaid_error_message(err)}"
 
 
 def _epoch_to_date(epoch: int) -> date:
@@ -345,10 +362,7 @@ def get_accounts():
                             if not tx.get("pending", False)
                         ]
                 except plaid.ApiException as tx_err:
-                    errors.append(
-                        f"Transactions error for institution {item.institution_name or item.item_id}: "
-                        f"{plaid_error_message(tx_err)}"
-                    )
+                    errors.append(_sync_error(item, "Transactions error", tx_err))
 
             # Group transactions by account_id
             tx_by_account: dict[str, list[dict]] = {}
@@ -358,22 +372,44 @@ def get_accounts():
                     tx_by_account.setdefault(acct_id, []).append(tx)
 
             # 3. Map accounts and transactions to SimpleFIN format
+            observed_accounts = []
             for acct in plaid_accounts:
                 acct_id = acct.get("account_id")
                 acct_txs = tx_by_account.get(acct_id, [])
                 sdf_account = map_plaid_account_to_simplefin(
                     account=acct,
                     transactions=acct_txs,
-                    institution_name=item.institution_name,
+                    institution_name=item.institution_name or item.item_id,
                     institution_id=item.institution_id or item.item_id,
                 )
                 sdf_accounts.append(sdf_account)
+                observed_accounts.append({**sdf_account, "transactions": []})
+
+            snapshot = db.session.get(PlaidAccountSnapshots, item.id)
+            if snapshot is None:
+                snapshot = PlaidAccountSnapshots(item_record_id=item.id)
+                db.session.add(snapshot)
+            snapshot.accounts = json.dumps(observed_accounts)
+            db.session.commit()
 
         except plaid.ApiException as item_err:
-            errors.append(
-                f"Plaid error for institution {item.institution_name or item.item_id}: "
-                f"{plaid_error_message(item_err)}"
-            )
+            errors.append(_sync_error(item, "Plaid error", item_err))
+            if plaid_error_code(item_err) == LOGIN_REQUIRED:
+                snapshot = db.session.get(PlaidAccountSnapshots, item.id)
+                cached = json.loads(snapshot.accounts) if snapshot else []
+                if not cached:
+                    # A successful empty list would make Actual report deletion.
+                    # Without a genuine snapshot, fail the sync rather than invent
+                    # a balance or account. Other items are retried on the next sync.
+                    return jsonify(build_simplefin_response([], errors)), 503
+                sdf_accounts.extend(cached)
+                for account in cached:
+                    message = (
+                        f"Connection to {account['org']['name']} may need attention: "
+                        "reconnect it in the bridge dashboard."
+                    )
+                    if message not in errors:
+                        errors.append(message)
         except Exception:
             logger.exception(
                 "Unexpected error while syncing Plaid item %s", item.item_id

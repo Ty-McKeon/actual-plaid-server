@@ -25,7 +25,9 @@ from app import app, create_app
 from gunicorn.config import Config
 from middleware.auth import validate_cloudflare_jwt
 from models import (
+    PlaidAccountSnapshots,
     PlaidItems,
+    PlaidLinkSessions,
     SimpleFinCredentials,
     UserPlaidConfigs,
     db,
@@ -33,6 +35,7 @@ from models import (
     hash_simplefin_password,
 )
 from services import routing_service
+from services.plaid_service import oauth_redirect_uri, transaction_history_days
 from services.simplefin_service import (
     format_amount,
     format_balance,
@@ -184,6 +187,518 @@ class BridgeTests(unittest.TestCase):
                 200,
             )
             self.assertIsNone(db.session.get(PlaidItems, item_id))
+
+    def plaid_client(self):
+        """Replaces the Plaid API client while keeping the real request building."""
+        return patch("services.plaid_service.plaid_api.PlaidApi")
+
+    def test_new_links_request_the_configured_transaction_history(self):
+        self.item()
+        cases = [({}, 730), ({"PLAID_TRANSACTION_HISTORY_DAYS": "180"}, 180)]
+        for environ, expected in cases:
+            with (
+                self.subTest(environ=environ),
+                patch.dict(os.environ, environ),
+                self.plaid_client() as api,
+            ):
+                create = api.return_value.link_token_create
+                create.return_value = {"link_token": "link-new"}
+                response = self.client.post(
+                    "/api/plaid/create-link-token", headers=self.headers
+                )
+                self.assertEqual(response.get_json()["link_token"], "link-new")
+
+                sent = create.call_args.args[0].to_dict()
+                self.assertEqual(sent["transactions"], {"days_requested": expected})
+                self.assertEqual(sent["products"], ["transactions"])
+                self.assertNotIn("access_token", sent)
+
+    def test_invalid_transaction_history_setting_is_rejected(self):
+        for value in ("0", "731", "-5", "two years", "1.5"):
+            with (
+                self.subTest(value=value),
+                patch.dict(os.environ, {"PLAID_TRANSACTION_HISTORY_DAYS": value}),
+                self.assertRaises(ValueError),
+            ):
+                transaction_history_days()
+
+    def test_link_tokens_carry_the_redirect_address_when_one_is_set(self):
+        item_id = self.item()
+        uri = "https://bridge.example.com/oauth-return"
+        paths = [
+            "/api/plaid/create-link-token",
+            f"/api/plaid/items/{item_id}/link-token",
+        ]
+        for path in paths:
+            with self.subTest(path=path), self.plaid_client() as api:
+                create = api.return_value.link_token_create
+                create.return_value = {"link_token": "link"}
+
+                self.client.post(path, headers=self.headers)
+                self.assertNotIn("redirect_uri", create.call_args.args[0].to_dict())
+
+                with patch.dict(os.environ, {"PLAID_REDIRECT_URI": uri}):
+                    self.client.post(path, headers=self.headers)
+                self.assertEqual(
+                    create.call_args.args[0].to_dict()["redirect_uri"], uri
+                )
+
+    def test_linking_falls_back_to_a_popup_when_plaid_rejects_the_redirect_address(
+        self,
+    ):
+        self.item()
+        rejected = plaid.ApiException(status=400)
+        rejected.body = (
+            '{"error_code":"INVALID_FIELD","error_message":"OAuth redirect URI must '
+            'be configured in the developer dashboard."}'
+        )
+        other = plaid.ApiException(status=400)
+        other.body = '{"error_code":"INVALID_FIELD","error_message":"bad country code"}'
+        environ = {"PLAID_REDIRECT_URI": "https://bridge.example.com/oauth-return"}
+
+        with patch.dict(os.environ, environ), self.plaid_client() as api:
+            create = api.return_value.link_token_create
+            create.side_effect = [rejected, {"link_token": "link-popup"}]
+            response = self.client.post(
+                "/api/plaid/create-link-token", headers=self.headers
+            )
+            self.assertEqual(response.get_json()["link_token"], "link-popup")
+            first, second = (call.args[0].to_dict() for call in create.call_args_list)
+            self.assertIn("redirect_uri", first)
+            self.assertNotIn("redirect_uri", second)
+            self.assertEqual(second["products"], ["transactions"])
+
+            # Any other rejection is reported, not retried
+            create.reset_mock()
+            create.side_effect = [other]
+            response = self.client.post(
+                "/api/plaid/create-link-token", headers=self.headers
+            )
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual(create.call_count, 1)
+
+    def test_redirect_address_must_be_https_and_point_at_the_return_page(self):
+        valid = [
+            "https://bridge.example.com/oauth-return",
+            "http://localhost:8080/oauth-return",
+        ]
+        invalid = [
+            "http://bridge.example.com/oauth-return",
+            "https://bridge.example.com/",
+            "https://bridge.example.com/oauth-return/",
+            "https://bridge.example.com/oauth-return?x=1",
+            "bridge.example.com/oauth-return",
+            "javascript:alert(1)",
+        ]
+        for uri in valid:
+            with patch.dict(os.environ, {"PLAID_REDIRECT_URI": uri}):
+                self.assertEqual(oauth_redirect_uri(), uri)
+        for uri in invalid:
+            with (
+                self.subTest(uri=uri),
+                patch.dict(os.environ, {"PLAID_REDIRECT_URI": uri}),
+            ):
+                with self.assertRaises(ValueError):
+                    oauth_redirect_uri()
+                # A bad setting stops the bridge at startup
+                with self.assertRaises(ValueError):
+                    create_app()
+        self.assertIsNone(oauth_redirect_uri())
+
+    def test_bank_return_page_serves_the_dashboard_to_signed_in_users_only(self):
+        self.item()
+        response = self.client.get("/oauth-return?oauth_state_id=abc")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("js/dashboard.js", response.get_data(as_text=True))
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+        with patch.dict(
+            os.environ, {"FLASK_DEBUG": "0", "FLASK_ENV": "production", "DEBUG": "0"}
+        ):
+            self.assertEqual(
+                self.client.get("/oauth-return?oauth_state_id=abc").status_code, 401
+            )
+
+    def test_reconnect_opens_update_mode_for_the_existing_connection(self):
+        item_id = self.item()
+        with self.plaid_client() as api:
+            create = api.return_value.link_token_create
+            create.return_value = {"link_token": "link-update"}
+            response = self.client.post(
+                f"/api/plaid/items/{item_id}/link-token", headers=self.headers
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["link_token"], "link-update")
+            self.assertEqual(response.get_json()["item_id"], item_id)
+
+            # Update mode names the connection and must not ask for products again
+            sent = create.call_args.args[0].to_dict()
+            self.assertEqual(sent["access_token"], "access")
+            self.assertNotIn("products", sent)
+            self.assertNotIn("transactions", sent)
+
+        # Nothing about the stored connection changes
+        item = db.session.get(PlaidItems, item_id)
+        self.assertEqual((item.item_id, item.access_token), ("test-item", "access"))
+
+    def test_reconnect_and_status_are_limited_to_the_users_own_institutions(self):
+        item_id = self.item()
+        with (
+            self.plaid_client() as api,
+            patch.dict(os.environ, {"DEV_USER_ID": "someone-else"}),
+        ):
+            for method, path in [
+                ("post", f"/api/plaid/items/{item_id}/link-token"),
+                ("get", f"/api/plaid/items/{item_id}/status"),
+                ("post", "/api/plaid/items/9999/link-token"),
+            ]:
+                response = getattr(self.client, method)(path, headers=self.headers)
+                self.assertEqual(response.status_code, 404, path)
+            api.return_value.link_token_create.assert_not_called()
+            api.return_value.item_get.assert_not_called()
+
+        cross_site = self.client.post(
+            f"/api/plaid/items/{item_id}/link-token",
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(cross_site.status_code, 403)
+
+    def test_status_reports_the_health_of_a_connection(self):
+        item_id = self.item()
+        soon = datetime.now(timezone.utc) + timedelta(days=10)
+        later = datetime.now(timezone.utc) + timedelta(days=200)
+        login_required = plaid.ApiException(status=400)
+        login_required.body = '{"error_code":"ITEM_LOGIN_REQUIRED"}'
+        outage = plaid.ApiException(status=500)
+        outage.body = '{"error_code":"INTERNAL_SERVER_ERROR"}'
+
+        cases = [
+            ({"item": {"error": None}}, "active", None),
+            (
+                {"item": {"error": None, "consent_expiration_time": later}},
+                "active",
+                "Access expires",
+            ),
+            (
+                {"item": {"error": None, "consent_expiration_time": soon}},
+                "expiring",
+                "Access expires",
+            ),
+            (
+                {"item": {"error": {"error_code": "ITEM_LOGIN_REQUIRED"}}},
+                "login_required",
+                "sign in again",
+            ),
+            ({"item": {"error": {"error_code": "NO_ACCOUNTS"}}}, "error", None),
+            (login_required, "login_required", "sign in again"),
+            (outage, "unknown", None),
+            (TimeoutError("slow"), "unknown", None),
+        ]
+        for answer, state, detail in cases:
+            with self.subTest(state=state, answer=answer), self.plaid_client() as api:
+                if isinstance(answer, Exception):
+                    api.return_value.item_get.side_effect = answer
+                else:
+                    api.return_value.item_get.return_value = answer
+                response = self.client.get(f"/api/plaid/items/{item_id}/status")
+
+                self.assertEqual(response.status_code, 200)
+                body = response.get_json()
+                self.assertEqual(body["state"], state)
+                if detail:
+                    self.assertIn(detail, body["detail"])
+                else:
+                    self.assertIsNone(body["detail"])
+
+    def test_dashboard_shows_status_and_reconnect_for_each_institution(self):
+        item_id = self.item()
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertIn(f'hx-get="/api/plaid/items/{item_id}/status"', page)
+        self.assertIn(f'data-reconnect-item="{item_id}"', page)
+
+        with self.plaid_client() as api:
+            api.return_value.item_get.return_value = {
+                "item": {"error": {"error_code": "ITEM_LOGIN_REQUIRED"}}
+            }
+            badge = self.client.get(
+                f"/api/plaid/items/{item_id}/status", headers={"HX-Request": "true"}
+            ).get_data(as_text=True)
+        self.assertIn("Reconnect required", badge)
+        self.assertIn("badge-danger", badge)
+
+    def test_sync_tells_actual_when_an_institution_needs_reconnecting(self):
+        self.item()
+        login_required = plaid.ApiException(status=400)
+        login_required.body = '{"error_code":"ITEM_LOGIN_REQUIRED","error_message":"the login details changed"}'
+        outage = plaid.ApiException(status=500)
+        outage.body = (
+            '{"error_code":"INTERNAL_SERVER_ERROR","error_message":"try later"}'
+        )
+
+        with patch("routes.simplefin.PlaidService.from_config") as factory:
+            factory.return_value.get_accounts.side_effect = login_required
+            errors = self.client.get(
+                "/simplefin/accounts", headers=self.credential()
+            ).get_json()["errors"]
+            # Actual Budget recognises this opening phrase and flags the account
+            self.assertEqual(len(errors), 1)
+            self.assertTrue(
+                errors[0].startswith("Connection to test-item may need attention")
+            )
+            self.assertIn("reconnect it in the bridge dashboard", errors[0])
+
+            factory.return_value.get_accounts.side_effect = outage
+            errors = self.client.get(
+                "/simplefin/accounts",
+                headers={"Authorization": "Basic dGVzdC11c2VyOnRlc3QtcGFzc3dvcmQ="},
+            ).get_json()["errors"]
+            self.assertEqual(
+                errors, ["Plaid error for institution test-item: try later"]
+            )
+
+    def link_session(self, item_id=None):
+        with self.plaid_client() as api:
+            api.return_value.link_token_create.return_value = {
+                "link_token": "link-owned"
+            }
+            path = (
+                f"/api/plaid/items/{item_id}/link-token"
+                if item_id
+                else "/api/plaid/create-link-token"
+            )
+            response = self.client.post(path, headers=self.headers)
+            self.assertEqual(response.status_code, 200)
+            return response.get_json()["session_id"]
+
+    def test_link_continuation_and_exchange_reject_another_user_with_shared_client(
+        self,
+    ):
+        self.item()
+        session_id = self.link_session()
+        db.session.add(
+            UserPlaidConfigs(
+                user_id="other",
+                user_email="other@example.com",
+                plaid_client_id="client",
+                plaid_secret="secret",
+                plaid_env="sandbox",
+            )
+        )
+        db.session.commit()
+        with (
+            patch.dict(os.environ, {"DEV_USER_ID": "other"}),
+            self.plaid_client() as api,
+        ):
+            self.assertEqual(
+                self.client.get(f"/api/plaid/link-sessions/{session_id}").status_code,
+                404,
+            )
+            self.assertEqual(
+                self.client.delete(
+                    f"/api/plaid/link-sessions/{session_id}", headers=self.headers
+                ).status_code,
+                404,
+            )
+            response = self.client.post(
+                "/api/plaid/exchange-public-token",
+                json={
+                    "session_id": session_id,
+                    "public_token": "public-from-first-user",
+                },
+                headers=self.headers,
+            )
+            self.assertEqual(response.status_code, 404)
+            api.return_value.item_public_token_exchange.assert_not_called()
+        self.assertFalse(db.session.get(PlaidLinkSessions, session_id).completed)
+        self.assertEqual(PlaidItems.query.filter_by(user_id="other").count(), 0)
+
+    def test_link_exchange_requires_session_and_can_retry_completed_response(self):
+        self.item()
+        session_id = self.link_session()
+        with self.plaid_client() as api:
+            api.return_value.item_public_token_exchange.return_value = {
+                "access_token": "new-access",
+                "item_id": "new-item",
+            }
+            body = {"public_token": "public", "session_id": session_id}
+            self.assertEqual(
+                self.client.post(
+                    "/api/plaid/exchange-public-token",
+                    json={"public_token": "public"},
+                    headers=self.headers,
+                ).status_code,
+                400,
+            )
+            api.return_value.item_public_token_exchange.assert_not_called()
+            for expected in (201, 200):
+                self.assertEqual(
+                    self.client.post(
+                        "/api/plaid/exchange-public-token",
+                        json=body,
+                        headers=self.headers,
+                    ).status_code,
+                    expected,
+                )
+            self.assertEqual(api.return_value.item_public_token_exchange.call_count, 1)
+        self.assertEqual(PlaidItems.query.filter_by(item_id="new-item").count(), 1)
+
+    def test_expired_or_changed_config_session_cannot_continue(self):
+        self.item()
+        session_id = self.link_session()
+        session = db.session.get(PlaidLinkSessions, session_id)
+        self.assertEqual(
+            self.client.get(f"/api/plaid/link-sessions/{session_id}").get_json()[
+                "link_token"
+            ],
+            "link-owned",
+        )
+        session.expires_at = datetime.now(timezone.utc).replace(
+            tzinfo=None
+        ) - timedelta(seconds=1)
+        db.session.commit()
+        self.assertEqual(
+            self.client.get(f"/api/plaid/link-sessions/{session_id}").status_code, 410
+        )
+        session_id = self.link_session()
+        db.session.get(UserPlaidConfigs, self.user_id).plaid_client_id = "new-client"
+        db.session.commit()
+        self.assertEqual(
+            self.client.get(f"/api/plaid/link-sessions/{session_id}").status_code, 409
+        )
+
+    def test_failed_exchange_releases_reservation_for_retry(self):
+        self.item()
+        session_id = self.link_session()
+        error = plaid.ApiException(status=503)
+        error.body = '{"error_code":"INTERNAL_SERVER_ERROR"}'
+        with self.plaid_client() as api:
+            api.return_value.item_public_token_exchange.side_effect = [
+                error,
+                {"access_token": "new-access", "item_id": "new-item"},
+            ]
+            body = {"public_token": "public", "session_id": session_id}
+            self.assertEqual(
+                self.client.post(
+                    "/api/plaid/exchange-public-token", json=body, headers=self.headers
+                ).status_code,
+                502,
+            )
+            self.assertFalse(
+                db.session.get(PlaidLinkSessions, session_id).exchange_started
+            )
+            self.assertEqual(
+                self.client.post(
+                    "/api/plaid/exchange-public-token", json=body, headers=self.headers
+                ).status_code,
+                201,
+            )
+
+    def test_in_progress_exchange_cannot_be_replayed_or_cancelled(self):
+        self.item()
+        session_id = self.link_session()
+        session = db.session.get(PlaidLinkSessions, session_id)
+        session.exchange_started = True
+        db.session.commit()
+        with self.plaid_client() as api:
+            self.assertEqual(
+                self.client.post(
+                    "/api/plaid/exchange-public-token",
+                    json={"public_token": "public", "session_id": session_id},
+                    headers=self.headers,
+                ).status_code,
+                409,
+            )
+            self.assertEqual(
+                self.client.delete(
+                    f"/api/plaid/link-sessions/{session_id}", headers=self.headers
+                ).status_code,
+                409,
+            )
+            api.return_value.item_public_token_exchange.assert_not_called()
+
+    def test_reconnect_completion_and_cancel_are_owned_and_do_not_exchange(self):
+        item_id = self.item()
+        session_id = self.link_session(item_id)
+        with patch.dict(os.environ, {"DEV_USER_ID": "other"}):
+            self.assertEqual(
+                self.client.post(
+                    f"/api/plaid/link-sessions/{session_id}/complete",
+                    headers=self.headers,
+                ).status_code,
+                404,
+            )
+        with self.plaid_client() as api:
+            self.assertEqual(
+                self.client.post(
+                    "/api/plaid/exchange-public-token",
+                    json={"public_token": "unused", "session_id": session_id},
+                    headers=self.headers,
+                ).status_code,
+                400,
+            )
+            self.assertEqual(
+                self.client.post(
+                    f"/api/plaid/link-sessions/{session_id}/complete",
+                    headers=self.headers,
+                ).status_code,
+                204,
+            )
+            api.return_value.item_public_token_exchange.assert_not_called()
+        self.assertTrue(db.session.get(PlaidLinkSessions, session_id).completed)
+        self.assertEqual(
+            self.client.delete(
+                f"/api/plaid/link-sessions/{session_id}", headers=self.headers
+            ).status_code,
+            204,
+        )
+        self.assertIsNone(db.session.get(PlaidLinkSessions, session_id))
+        self.assertEqual(db.session.get(PlaidItems, item_id).access_token, "access")
+
+    def test_reconnect_failure_uses_real_snapshot_with_original_timestamp(self):
+        item_id = self.item()
+        auth = self.credential()
+        account = {
+            "account_id": "acct",
+            "name": "Checking",
+            "type": "depository",
+            "balances": {"current": 123.45, "iso_currency_code": "USD"},
+        }
+        error = plaid.ApiException(status=400)
+        error.body = '{"error_code":"ITEM_LOGIN_REQUIRED"}'
+        with patch("routes.simplefin.PlaidService.from_config") as factory:
+            factory.return_value.get_accounts.return_value = [account]
+            factory.return_value.get_transactions.return_value = []
+            original = self.client.get("/simplefin/accounts", headers=auth).get_json()[
+                "accounts"
+            ]
+            self.assertEqual(original[0]["balance"], "123.45")
+            self.assertIsNotNone(db.session.get(PlaidAccountSnapshots, item_id))
+            factory.return_value.get_accounts.side_effect = error
+            response = self.client.get("/simplefin/accounts", headers=auth)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["accounts"], original)
+            org = original[0]["org"]["name"]
+            self.assertTrue(
+                any(
+                    e.startswith(f"Connection to {org} may need attention")
+                    for e in response.get_json()["errors"]
+                )
+            )
+            with patch.dict(os.environ, {"DEV_USER_ID": "other"}):
+                self.assertEqual(self.client.get("/api/plaid/items").get_json(), [])
+
+    def test_reconnect_failure_without_snapshot_fails_instead_of_reporting_deletion(
+        self,
+    ):
+        self.item()
+        error = plaid.ApiException(status=400)
+        error.body = '{"error_code":"ITEM_LOGIN_REQUIRED"}'
+        with patch("routes.simplefin.PlaidService.from_config") as factory:
+            factory.return_value.get_accounts.side_effect = error
+            response = self.client.get("/simplefin/accounts", headers=self.credential())
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("reconnect", response.get_json()["errors"][0])
+        self.assertEqual(response.get_json()["accounts"], [])
 
     def test_claim_is_single_use_and_password_is_hashed(self):
         db.session.add(SimpleFinCredentials(user_id=self.user_id, claim_id="once"))

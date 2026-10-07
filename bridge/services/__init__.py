@@ -1,4 +1,6 @@
+from .plaid_service import LOGIN_REQUIRED as LOGIN_REQUIRED
 from .plaid_service import PlaidService as PlaidService
+from .plaid_service import plaid_error_code as plaid_error_code
 from .plaid_service import plaid_error_message as plaid_error_message
 from .routing_service import ActualUnavailable as ActualUnavailable
 from .routing_service import get_actual_upstream as get_actual_upstream

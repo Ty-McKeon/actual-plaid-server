@@ -99,6 +99,8 @@ Optional settings, with their defaults, are described in `.env.example`:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `PLAID_TRANSACTION_HISTORY_DAYS` | `730` | Days of history Plaid fetches when a bank is first linked (1 to 730). Fixed at that moment for each bank. |
+| `PLAID_REDIRECT_URI` | unset | Address banks send the user back to after their sign-in page. See [Linking from a phone](#linking-from-a-phone). |
 | `COMPOSE_PROFILES` | unset | Set to `provisioner` to create containers on demand. |
 | `ACTUAL_SELF_SERVICE` | `true` | Provisioner only. Give anyone Access lets in a container on their first visit. |
 | `ACTUAL_IDLE_MINUTES` | `30` | Provisioner only. Remove a user's container after this long without requests. |
@@ -136,6 +138,50 @@ Each user does this once:
 
 Every user should set a strong Actual password. It is what protects their server
 from anything else running on the host.
+
+### Reconnecting a bank
+
+Banks that use their own sign-in page (OAuth), such as Capital One or Chase, ask
+the user to approve access again from time to time, typically once a year. The
+dashboard shows each institution's status: **Expiring soon** in the last 30 days
+before the bank's deadline, and **Reconnect required** once syncing has stopped.
+
+Use **Reconnect** on that institution to sign in again. It keeps the same
+connection, so the accounts already linked in Actual carry on syncing. Do not
+disconnect and link the bank again instead: that creates new accounts, and each
+one would have to be relinked in Actual.
+
+In Production, these banks only appear in Plaid Link once the user's Plaid account
+has completed Plaid's OAuth registration in the Plaid dashboard.
+
+### Linking from a phone
+
+By default the bank's sign-in opens in a pop-up, which works on a computer but
+can be blocked on phones, especially inside another app's built-in browser. To
+make it reliable there, give Plaid an address to send the user back to:
+
+1. Set `PLAID_REDIRECT_URI` in `.env` to the bridge's public address followed by
+   `/oauth-return`, for example `https://bridge.example.com/oauth-return`, and
+   recreate the bridge with `docker compose up -d flask_bridge`.
+2. Each user adds the same address under **Allowed redirect URIs** in their own
+   Plaid dashboard (Developers, then API).
+
+A user who has not done step 2 can still link through the pop-up; the bridge
+falls back to it when Plaid rejects the address.
+
+Only one bank connection can be in progress per browser profile, across tabs.
+Finish that connection or use **Cancel pending connection** before starting
+another. If returning from a bank fails temporarily, reload the return page to
+retry. Continuation and saving are restricted to the user who started the flow.
+
+Link sessions and the last successfully fetched account snapshots are encrypted
+in the bridge database. On a reconnect failure, snapshots retain their original
+balance timestamp and report that attention is needed. If no snapshot exists yet,
+sync returns a temporary failure until the bank is reconnected.
+
+Rebuilding the bridge adds these two tables automatically; existing tables and
+credentials are preserved. Back up the bridge database before updating, and
+reload open dashboard tabs after the update to pick up the new Link workflow.
 
 ## Managing users
 
@@ -279,6 +325,12 @@ Run the tests with Python 3.11 or later and `bridge/requirements.txt` installed:
 
 ```bash
 python -m unittest discover -s tests
+```
+
+Frontend Link regression tests use Node 18 or later:
+
+```bash
+node --test tests/test_plaid_frontend.cjs
 ```
 
 `tests/docker_integration.py` exercises the whole stack against real Docker in a
